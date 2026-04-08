@@ -1,0 +1,38 @@
+# MA-HybridFuzz Configuration
+
+target:
+  binary: ""           # Path to target binary (inside container)
+  source_dir: ""       # Path to target source code
+  target_function: ""  # Target function name to reach
+  bug_type: ""         # e.g., buffer_overflow, use_after_free, integer_overflow
+
+llm:
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+  temperature: 0.3
+
+fuzzer:
+  engine: "afl++"
+  timeout: 3600          # Total fuzzing time in seconds (1 hour default)
+  exec_timeout: 1000     # Per-execution timeout in ms
+  memory_limit: 256      # Memory limit in MB
+  seed_count: 20         # Number of seeds to pre-generate
+  use_asan: true
+  use_ubsan: true
+
+scheduler:
+  attention_weight: 0.6  # Weight for attention distance in scheduling
+  coverage_weight: 0.3   # Weight for coverage novelty
+  speed_weight: 0.1      # Weight for execution speed
+
+reassessment:
+  plateau_threshold: 300  # Seconds without new coverage to trigger reassessment
+  max_reassessments: 5    # Max number of LLM reassessment rounds
+
+paths:
+  corpus: "/workspace/corpus"
+  crashes: "/workspace/crashes"
+  mutators: "/workspace/mutators"
+  distance_cache: "/workspace/distance_cache"
+  coverage: "/workspace/coverage"
+  logs: "/workspace/logs"

@@ -1,0 +1,4 @@
+Trong file project.md là mô tả về đề tài đồ án chuyên ngành của mình. Trong đó cả 4 gap được thiết kế cho đồ án tốt nghiệp, do đó mình chỉ cần chọn ra 2 gap để xử lí và hoàn thiện trong đồ án chuyên ngành.
+Mình cần bạn hỗ trợ thiết kế design architecture, mình đã có thử 1 design architecture ở image.png, tuy nhiên còn nhiều điểm thiếu sót chưa hoàn thiện do đó cần 1 design architecture mới.
+Trước hết hãy giúp mình chọn ra 2 gap dễ xử lí và có thể implement, đồng thời implement core fuzzer chạy trên docker để thuận tiện cho việc deploy cũng như debug.
+Sau đó tạo 1 repo private bao gồm mình (vilesport <vilesport@gmail.com>) và parnert của mình (aneii <annguyenthanhsrc@gmail.com>) để parnert có thể clone repo về và chạy setup fuzzer cũng như public sau này.

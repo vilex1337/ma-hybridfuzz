@@ -1,0 +1,31 @@
+# Environment
+.env
+
+# Workspace (runtime data)
+workspace/corpus/*
+workspace/crashes/*
+workspace/mutators/*
+workspace/distance_cache/*
+workspace/coverage/*
+workspace/logs/*
+workspace/instrumented/*
+!workspace/*/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,28 @@
+FROM aflplusplus/aflplusplus:latest
+
+# Install Python dependencies
+RUN apt-get update && apt-get install -y \
+    python3-pip \
+    python3-venv \
+    clang \
+    llvm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python packages
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Setup working directories
+RUN mkdir -p /workspace/{corpus,crashes,mutators,distance_cache,coverage,logs} \
+    && mkdir -p /opt/mahybridfuzz/src
+
+COPY src/ /opt/mahybridfuzz/src/
+COPY configs/ /opt/mahybridfuzz/configs/
+
+WORKDIR /opt/mahybridfuzz
+
+ENTRYPOINT ["python3", "src/orchestrator.py"]
