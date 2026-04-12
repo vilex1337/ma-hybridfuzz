@@ -329,10 +329,18 @@ class Orchestrator:
         """
         Search source files for `func_name` and return its declaration and body.
         Returns empty strings when the function cannot be located.
+
+        Uses a regex to find all occurrences of ``func_name(`` and selects only
+        those that are followed by a function body (``{`` after the closing ``)``),
+        skipping prototypes (``);``), call sites, and comments.
         """
+        import re
+
         source_path = Path(source_dir)
         if not source_path.exists():
             return {"declaration": "", "body": "", "key_lines": []}
+
+        definition_re = re.compile(r"\b" + re.escape(func_name) + r"\s*\(")
 
         for ext in ("*.c", "*.cpp", "*.cc"):
             for fpath in source_path.rglob(ext):
@@ -340,37 +348,66 @@ class Orchestrator:
                     content = fpath.read_text(errors="ignore")
                 except OSError:
                     continue
-                if func_name not in content:
-                    continue
-                # Extract a window around the first occurrence of the function name
-                idx = content.find(func_name)
-                # Walk back to find the declaration start (preceding return type line)
-                start = max(0, idx - 200)
-                # Walk forward to capture the function body (simple brace counting)
-                end = idx
-                depth = 0
-                found_open = False
-                while end < len(content):
-                    ch = content[end]
-                    if ch == "{":
-                        depth += 1
-                        found_open = True
-                    elif ch == "}" and found_open:
-                        depth -= 1
-                        if depth == 0:
-                            end += 1
-                            break
-                    end += 1
-                snippet = content[start:end]
-                # Split into declaration (before first '{') and body
-                brace_pos = snippet.find("{")
-                declaration = snippet[:brace_pos].strip() if brace_pos != -1 else ""
-                body = snippet[brace_pos:].strip() if brace_pos != -1 else snippet
-                return {
-                    "declaration": declaration,
-                    "body": body[:4000],
-                    "key_lines": [],
-                }
+
+                for m in definition_re.finditer(content):
+                    # Walk forward through the parameter list using paren balancing
+                    # to find the closing ')' of the signature.
+                    pos = m.end() - 1  # rewind to the opening '('
+                    depth = 0
+                    while pos < len(content):
+                        ch = content[pos]
+                        if ch == "(":
+                            depth += 1
+                        elif ch == ")":
+                            depth -= 1
+                            if depth == 0:
+                                pos += 1
+                                break
+                        pos += 1
+
+                    # Check what follows the closing ')' (ignoring whitespace).
+                    # A definition opens a '{'; a prototype ends with ';'.
+                    lookahead = content[pos:pos + 256].lstrip()
+                    if not lookahead.startswith("{"):
+                        continue  # prototype, call site, or malformed — skip
+
+                    brace_start = pos + (len(content[pos:pos + 256]) - len(lookahead))
+
+                    # Walk backward from the match start to find the declaration
+                    # start, stopping at the previous '}' or ';' so we don't pull
+                    # in unrelated code.
+                    lookbehind = content[max(0, m.start() - 200):m.start()]
+                    last_boundary = max(lookbehind.rfind("}"), lookbehind.rfind(";"))
+                    decl_start = (
+                        max(0, m.start() - 200) + last_boundary + 1
+                        if last_boundary != -1
+                        else max(0, m.start() - 200)
+                    )
+                    declaration = content[decl_start:brace_start].strip()
+
+                    # Extract the body via brace-depth counting from '{'.
+                    end = brace_start
+                    body_depth = 0
+                    found_open = False
+                    while end < len(content):
+                        ch = content[end]
+                        if ch == "{":
+                            body_depth += 1
+                            found_open = True
+                        elif ch == "}" and found_open:
+                            body_depth -= 1
+                            if body_depth == 0:
+                                end += 1
+                                break
+                        end += 1
+
+                    body = content[brace_start:end].strip()
+                    return {
+                        "declaration": declaration,
+                        "body": body[:4000],
+                        "key_lines": [],
+                    }
+
         return {"declaration": "", "body": "", "key_lines": []}
 
     def _run_fuzzing_loop(self):
