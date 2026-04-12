@@ -5,28 +5,27 @@ Coordinates the full pipeline: Pre-phase -> Fuzzing Loop -> On-demand Reassessme
 
 import argparse
 import logging
-import os
 import signal
-import sys
 import time
 from pathlib import Path
 
 import yaml
 
 from pre_phase.reasoning_agent import ReasoningAgent
+from pre_phase.reassessment_agent import ReassessmentAgent
+from pre_phase.persistent_memory import PersistentMemory
 from pre_phase.seed_generator import SeedGenerator
 from pre_phase.mutator_generator import MutatorGenerator
 from pre_phase.attention_computer import AttentionComputer
 from fuzzing.afl_runner import AFLRunner
 from fuzzing.scheduler import AttentionScheduler
 
+# Console-only handler at module level; a file handler is added in
+# Orchestrator.__init__ once the config (and its log path) is known.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("/workspace/logs/orchestrator.log"),
-    ],
+    handlers=[logging.StreamHandler()],
 )
 logger = logging.getLogger("orchestrator")
 
@@ -36,12 +35,26 @@ class Orchestrator:
         with open(config_path) as f:
             self.config = yaml.safe_load(f)
 
+        # Add file handler now that the config log path is available.
+        log_dir = Path(self.config["paths"]["logs"])
+        log_dir.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_dir / "orchestrator.log")
+        file_handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+        )
+        logging.getLogger().addHandler(file_handler)
+
         self.reasoning = ReasoningAgent(self.config)
+        self.reassessment = ReassessmentAgent(self.config)
+        self.memory = PersistentMemory(self.config)
         self.seed_gen = SeedGenerator(self.config)
         self.mutator_gen = MutatorGenerator(self.config)
         self.attention = AttentionComputer(self.config)
         self.afl = AFLRunner(self.config)
         self.scheduler = AttentionScheduler(self.config)
+
+        # Pre-phase context preserved for reassessment (avoids re-querying LLM)
+        self._pre_phase_ctx: dict = {}
 
         self._running = True
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -68,38 +81,242 @@ class Orchestrator:
         self._report_results()
 
     def _run_pre_phase(self):
-        # Step 1: Analyze target
-        logger.info("[Pre-phase] Analyzing target...")
-        analysis = self.reasoning.analyze_target(
-            source_dir=self.config["target"]["source_dir"],
-            target_function=self.config["target"]["target_function"],
-            bug_type=self.config["target"]["bug_type"],
-        )
-        logger.info("[Pre-phase] Analysis complete: %d paths identified", len(analysis.get("paths", [])))
+        target_function = self.config["target"]["target_function"]
+        source_dir = self.config["target"]["source_dir"]
+        bug_report = self.config["target"].get("bug_report", "")
+        program_usage = self.config["target"].get("program_usage", "")
+        fcc = self.config["target"].get("fcc", [])  # list of function names, entry -> target
+        bug_type = self.config["target"]["bug_type"]
 
-        # Step 2: Generate seeds
-        logger.info("[Pre-phase] Generating reachable seeds...")
-        seeds = self.seed_gen.generate(
-            analysis=analysis,
-            count=self.config["fuzzer"]["seed_count"],
-        )
-        logger.info("[Pre-phase] Generated %d seeds", len(seeds))
+        # ── SA: Static Analysis ───────────────────────────────────────────────
+        # Compute attention distance matrix (uses Clang-AST-derived call graph)
+        logger.info("[Pre-phase SA] Computing attention distance matrix...")
+        self.attention.compute(source_dir=source_dir, target_function=target_function)
+        logger.info("[Pre-phase SA] Attention distance matrix cached")
 
-        # Step 3: Generate bug-specific mutators
-        logger.info("[Pre-phase] Generating bug-specific mutators...")
+        # ── Persistent Memory: check for cached pre-phase context ─────────────
+        # If the LLM pre-phase was already run for this target, reload from disk
+        # and skip all LLM calls (saves ~1-2 API calls per restart).
+        cached_ctx = self.memory.load_pre_phase_ctx(target_function, bug_type)
+        if cached_ctx is not None:
+            self._pre_phase_ctx = cached_ctx
+            logger.info(
+                "[Pre-phase] Restored from persistent memory — skipping LLM pre-phase. "
+                "Memory summary: %s",
+                self.memory.summary(),
+            )
+            return
+
+        # ── Bug Information ───────────────────────────────────────────────────
+        logger.info("[Pre-phase] Extracting bug information from report...")
+        bug_info = self.reasoning.extract_bug_info(bug_report) if bug_report else {}
+        logger.info(
+            "[Pre-phase] Bug info: function=%s type=%s",
+            bug_info.get("function", target_function),
+            bug_info.get("vulnerability_type", bug_type),
+        )
+
+        # ── Function Summary ──────────────────────────────────────────────────
+        # Generate a summary for the target function (and FCC functions if available)
+        logger.info("[Pre-phase] Generating function summary for '%s'...", target_function)
+        target_src = self._load_function_source(source_dir, target_function)
+        target_summary = self.reasoning.summarize_function(
+            func_name=target_function,
+            func_declaration=target_src.get("declaration", ""),
+            func_body=target_src.get("body", ""),
+        )
+        logger.info(
+            "[Pre-phase] Function summary generated: %s...",
+            target_summary.get("functionality", "")[:80],
+        )
+
+        # Summarize FCC intermediate functions if provided
+        fcc_summaries: dict[str, dict] = {target_function: target_summary}
+        for func_name in fcc:
+            if func_name == target_function:
+                continue
+            src = self._load_function_source(source_dir, func_name)
+            fcc_summaries[func_name] = self.reasoning.summarize_function(
+                func_name=func_name,
+                func_declaration=src.get("declaration", ""),
+                func_body=src.get("body", ""),
+            )
+
+        # ── Reachable Seed Generation ─────────────────────────────────────────
+        # Step 1: Preliminary seed from Program Usage + Function Summary
+        logger.info("[Pre-phase Opt] Generating preliminary seed...")
+        prelim = self.reasoning.generate_preliminary_seed(
+            target_function=target_function,
+            func_summary=target_summary,
+            program_usage=program_usage,
+        )
+        logger.info(
+            "[Pre-phase Opt] Preliminary seed: format=%s command=%s",
+            prelim.get("input_format", "?"),
+            prelim.get("command", "?"),
+        )
+
+        # Step 2a: Reasoning along FCC (if complete FCC is available)
+        # Step 2b: Reasoning based on Functionality (fallback for incomplete FCC)
+        reachable_seeds = self._generate_reachable_seeds(
+            preliminary_seed=prelim,
+            fcc=fcc,
+            fcc_summaries=fcc_summaries,
+            target_function=target_function,
+            target_summary=target_summary,
+            source_dir=source_dir,
+            program_usage=program_usage,
+        )
+
+        # Materialise all generated seeds to the corpus directory
+        logger.info("[Pre-phase Opt] Writing %d reachable seeds to corpus...", len(reachable_seeds))
+        written = self.seed_gen.write_seeds(reachable_seeds)
+        logger.info("[Pre-phase Opt] Wrote %d seeds", len(written))
+
+        # ── Bug-Specific Mutators ─────────────────────────────────────────────
+        logger.info("[Pre-phase Mutator] Generating bug-specific mutators...")
         mutators = self.mutator_gen.generate(
-            analysis=analysis,
-            bug_type=self.config["target"]["bug_type"],
+            analysis={
+                "bug_info": bug_info,
+                "function_summary": target_summary,
+                "vulnerability_pattern": bug_info.get("cause", ""),
+                "trigger_conditions": bug_info.get("trigger_conditions", []),
+            },
+            bug_type=bug_info.get("vulnerability_type", self.config["target"]["bug_type"]),
         )
-        logger.info("[Pre-phase] Generated %d custom mutators", len(mutators))
+        logger.info("[Pre-phase Mutator] Generated %d custom mutators", len(mutators))
 
-        # Step 4: Compute attention distance matrix
-        logger.info("[Pre-phase] Computing attention distance matrix...")
-        self.attention.compute(
-            source_dir=self.config["target"]["source_dir"],
-            target_function=self.config["target"]["target_function"],
-        )
-        logger.info("[Pre-phase] Attention distance matrix cached")
+        # ── Persist context for Phase 3 reassessment ──────────────────────────
+        # Store everything the reassessment agent needs so we never re-query the
+        # LLM for information already gathered in the pre-phase.
+        self._pre_phase_ctx = {
+            "bug_info": bug_info,
+            "target_summary": target_summary,
+            "program_usage": program_usage,
+            "target_function": target_function,
+            "input_format": prelim.get("input_format", "unknown"),
+        }
+        # Write to disk so a restarted orchestrator can skip the LLM pre-phase.
+        self.memory.save_pre_phase_ctx(target_function, bug_type, self._pre_phase_ctx)
+
+    def _generate_reachable_seeds(
+        self,
+        preliminary_seed: dict,
+        fcc: list[str],
+        fcc_summaries: dict[str, dict],
+        target_function: str,
+        target_summary: dict,
+        source_dir: str,
+        program_usage: str,
+    ) -> list[dict]:
+        """
+        Generate reachable seeds following RANDLUZZ §3.3.2 / §3.3.3.
+
+        If a complete FCC is available, reason iteratively along it.
+        Otherwise fall back to functionality-based reasoning with neighbor functions.
+        """
+        seeds = [preliminary_seed]
+
+        if len(fcc) >= 2:
+            # §3.3.2 - complete FCC available: iterate from entry toward target
+            logger.info("[Pre-phase Opt] Reasoning along FCC (%d hops)...", len(fcc) - 1)
+            current_description = (
+                f"{preliminary_seed.get('seed_description', 'preliminary seed')} "
+                f"(format: {preliminary_seed.get('input_format', 'unknown')})"
+            )
+            for i in range(len(fcc) - 1):
+                deviation_name = fcc[i]
+                goal_name = fcc[i + 1]
+                deviation_src = self._load_function_source(source_dir, deviation_name)
+                result = self.reasoning.reason_along_fcc(
+                    current_input_description=current_description,
+                    deviation_function_name=deviation_name,
+                    deviation_function_body=deviation_src.get("body", ""),
+                    examined_lines=deviation_src.get("key_lines", []),
+                    goal_function_name=goal_name,
+                    program_usage=program_usage,
+                )
+                if result.get("seed_content") or result.get("seed_code"):
+                    seeds.append(result)
+                    # Also add any candidates for ambiguous branches
+                    for candidate in result.get("candidate_seeds", []):
+                        if candidate.get("seed_content") or candidate.get("seed_code"):
+                            seeds.append(candidate)
+                current_description = result.get(
+                    "modification_rationale", current_description
+                )
+        else:
+            # §3.3.3 - incomplete FCC: reason based on neighbor functionality
+            logger.info(
+                "[Pre-phase Opt] FCC unavailable, reasoning based on neighbor functionality..."
+            )
+            neighbor_names = self.attention.get_neighbors(target_function, top_k=3)
+            for neighbor_name in neighbor_names:
+                neighbor_src = self._load_function_source(source_dir, neighbor_name)
+                neighbor_summary = self.reasoning.summarize_function(
+                    func_name=neighbor_name,
+                    func_declaration=neighbor_src.get("declaration", ""),
+                    func_body=neighbor_src.get("body", ""),
+                )
+                result = self.reasoning.reason_based_on_functionality(
+                    target_function=target_function,
+                    target_func_summary=target_summary,
+                    neighbor_function_name=neighbor_name,
+                    neighbor_func_summary=neighbor_summary,
+                    program_usage=program_usage,
+                )
+                if result.get("seed_content") or result.get("seed_code"):
+                    seeds.append(result)
+
+        return seeds
+
+    def _load_function_source(self, source_dir: str, func_name: str) -> dict:
+        """
+        Search source files for `func_name` and return its declaration and body.
+        Returns empty strings when the function cannot be located.
+        """
+        source_path = Path(source_dir)
+        if not source_path.exists():
+            return {"declaration": "", "body": "", "key_lines": []}
+
+        for ext in ("*.c", "*.cpp", "*.cc"):
+            for fpath in source_path.rglob(ext):
+                try:
+                    content = fpath.read_text(errors="ignore")
+                except OSError:
+                    continue
+                if func_name not in content:
+                    continue
+                # Extract a window around the first occurrence of the function name
+                idx = content.find(func_name)
+                # Walk back to find the declaration start (preceding return type line)
+                start = max(0, idx - 200)
+                # Walk forward to capture the function body (simple brace counting)
+                end = idx
+                depth = 0
+                found_open = False
+                while end < len(content):
+                    ch = content[end]
+                    if ch == "{":
+                        depth += 1
+                        found_open = True
+                    elif ch == "}" and found_open:
+                        depth -= 1
+                        if depth == 0:
+                            end += 1
+                            break
+                    end += 1
+                snippet = content[start:end]
+                # Split into declaration (before first '{') and body
+                brace_pos = snippet.find("{")
+                declaration = snippet[:brace_pos].strip() if brace_pos != -1 else ""
+                body = snippet[brace_pos:].strip() if brace_pos != -1 else snippet
+                return {
+                    "declaration": declaration,
+                    "body": body[:4000],
+                    "key_lines": [],
+                }
+        return {"declaration": "", "body": "", "key_lines": []}
 
     def _run_fuzzing_loop(self):
         # Instrument target binary
@@ -129,6 +346,7 @@ class Orchestrator:
         plateau_threshold = self.config["reassessment"]["plateau_threshold"]
         max_reassessments = self.config["reassessment"]["max_reassessments"]
         reassessment_count = 0
+        last_reassessment_coverage = 0   # coverage at the time of last reassessment
         last_new_coverage_time = time.time()
         last_coverage_count = 0
         start_time = time.time()
@@ -155,44 +373,139 @@ class Orchestrator:
                 stats.get("execs_per_sec", "N/A"),
             )
 
-            # Check for plateau -> trigger reassessment
-            plateau_time = time.time() - last_new_coverage_time
-            if (
-                plateau_time > plateau_threshold
-                and reassessment_count < max_reassessments
-            ):
-                logger.info(
-                    "[Reassessment] Coverage plateau detected (%ds). Triggering LLM reassessment #%d...",
-                    int(plateau_time),
-                    reassessment_count + 1,
+            # ── Persistent Memory: snapshot coverage every poll cycle ─────────
+            self.memory.record_coverage_snapshot(stats)
+
+            # ── Persistent Memory: update confidence for last reassessment ────
+            # Once coverage improves after a reassessment, record the delta.
+            if reassessment_count > 0 and current_coverage > last_reassessment_coverage:
+                self.memory.update_reassessment_confidence(
+                    count=reassessment_count,
+                    coverage_after=current_coverage,
                 )
-                self._run_reassessment(stats)
+                last_reassessment_coverage = current_coverage
+
+            # ── Phase 3: On-Demand Reassessment ──────────────────────────────
+            plateau_time = time.time() - last_new_coverage_time
+            if plateau_time > plateau_threshold and reassessment_count < max_reassessments:
+                logger.info(
+                    "[Reassessment #%d] Plateau detected (%ds). Activating LLM...",
+                    reassessment_count + 1,
+                    int(plateau_time),
+                )
+                self._run_reassessment(stats, reassessment_count + 1, int(plateau_time))
                 reassessment_count += 1
+                last_reassessment_coverage = current_coverage
                 last_new_coverage_time = time.time()
 
         self.afl.stop()
 
-    def _run_reassessment(self, current_stats: dict):
-        """On-demand LLM reassessment when fuzzer is stuck."""
-        analysis = self.reasoning.reassess(
-            current_stats=current_stats,
-            coverage_dir=self.config["paths"]["coverage"],
-            corpus_dir=self.config["paths"]["corpus"],
+    def _run_reassessment(self, afl_stats: dict, reassessment_count: int, plateau_s: int = 0):
+        """
+        Phase 3: On-Demand Reassessment (Project.md §3).
+
+        Activates at most `max_reassessments` times during the fuzzing session,
+        only when a coverage plateau is detected.  Uses exactly 2 LLM calls:
+          Call 1 — ReassessmentAgent.diagnose()            → why is fuzzer stuck?
+          Call 2 — ReassessmentAgent.generate_recovery_plan() → new seeds + mutators
+
+        All pre-phase context (bug_info, target_summary, program_usage) is reused
+        from self._pre_phase_ctx so no additional LLM calls are needed for context.
+        New seeds are hot-added to the corpus directory; AFL++ picks them up
+        automatically via its dynamic queue refresh.
+
+        Args:
+            afl_stats         : current AFL++ stats dict
+            reassessment_count: 1-based index of this reassessment
+            plateau_s         : actual seconds without new coverage (measured by caller)
+        """
+        ctx = self._pre_phase_ctx
+        if not ctx:
+            logger.warning("[Reassessment] No pre-phase context available, skipping.")
+            return
+
+        corpus_dir = self.config["paths"]["corpus"]
+        crashes_dir = self.config["paths"]["crashes"]
+
+        # ── Build runtime summaries (no LLM) ─────────────────────────────────
+        corpus_summary = ReassessmentAgent.summarize_corpus(corpus_dir)
+        crash_summary = ReassessmentAgent.summarize_crashes(crashes_dir)
+        coverage_before = int(afl_stats.get("paths_total", 0))
+
+        target_info = {
+            "target_function": ctx.get("target_function", ""),
+            "bug_type": ctx.get("bug_info", {}).get("vulnerability_type",
+                         self.config["target"]["bug_type"]),
+            "input_format": ctx.get("input_format", "unknown"),
+        }
+
+        # ── Persistent Memory: load history to avoid repeating failures ───────
+        failed_strategies = self.memory.get_failed_strategies()
+        coverage_trend = self.memory.get_coverage_trend(last_n=10)
+        if failed_strategies:
+            logger.info(
+                "[Reassessment #%d] %d previously failed strategies loaded from memory.",
+                reassessment_count, len(failed_strategies),
+            )
+
+        # ── Call 1: Diagnose ──────────────────────────────────────────────────
+        diagnosis = self.reassessment.diagnose(
+            afl_stats=afl_stats,
+            corpus_summary=corpus_summary,
+            crash_summary=crash_summary,
+            stuck_duration_s=plateau_s,
+            target_info=target_info,
+            bug_info=ctx.get("bug_info", {}),
         )
 
-        # Generate new seeds based on reassessment
-        new_seeds = self.seed_gen.generate(
-            analysis=analysis,
-            count=self.config["fuzzer"]["seed_count"] // 2,
+        # ── Call 2: Recovery plan (with persistent memory context) ────────────
+        plan = self.reassessment.generate_recovery_plan(
+            diagnosis=diagnosis,
+            target_summary=ctx.get("target_summary", {}),
+            program_usage=ctx.get("program_usage", ""),
+            bug_info=ctx.get("bug_info", {}),
+            reassessment_count=reassessment_count,
+            failed_strategies=failed_strategies,
+            coverage_trend=coverage_trend,
         )
-        logger.info("[Reassessment] Generated %d new seeds", len(new_seeds))
 
-        # Update mutators if needed
-        new_mutators = self.mutator_gen.generate(
-            analysis=analysis,
-            bug_type=self.config["target"]["bug_type"],
+        # ── Apply: write new seeds ────────────────────────────────────────────
+        new_seeds = plan.get("new_seeds", [])
+        written: list = []
+        if new_seeds:
+            written = self.seed_gen.write_seeds(new_seeds)
+            logger.info("[Reassessment #%d] Added %d new seeds to corpus", reassessment_count, len(written))
+        else:
+            logger.warning("[Reassessment #%d] Recovery plan produced no seeds", reassessment_count)
+
+        # ── Apply: regenerate mutators if strategies changed ──────────────────
+        mutator_update = plan.get("mutator_update", {})
+        if mutator_update and plan.get("mutation_strategies"):
+            new_mutators = self.mutator_gen.generate(
+                analysis=mutator_update,
+                bug_type=target_info["bug_type"],
+            )
+            logger.info(
+                "[Reassessment #%d] Generated %d updated mutators (focus: %s)",
+                reassessment_count,
+                len(new_mutators),
+                plan.get("mutator_focus", "")[:60],
+            )
+
+        # ── Persistent Memory: record this reassessment ───────────────────────
+        self.memory.record_reassessment(
+            count=reassessment_count,
+            diagnosis=diagnosis,
+            plan=plan,
+            seeds_written=len(written),
+            coverage_before=coverage_before,
         )
-        logger.info("[Reassessment] Updated %d mutators", len(new_mutators))
+
+        logger.info(
+            "[Reassessment #%d] Complete. Rationale: %s",
+            reassessment_count,
+            plan.get("rationale", "")[:120],
+        )
 
     def _report_results(self):
         crashes_dir = Path(self.config["paths"]["crashes"])
