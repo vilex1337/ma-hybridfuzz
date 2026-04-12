@@ -100,12 +100,13 @@ class SeedGenerator:
             script_path = tmp.name
 
         try:
-            proc = subprocess.run(
-                ["python3", "-I", script_path],    # -I: isolated mode
-                capture_output=True, text=True, timeout=30,
-                cwd=tempfile.mkdtemp(),            # isolated working directory
-                env={"PATH": "/usr/bin:/bin:/usr/local/bin"},  # minimal environment
-            )
+            with tempfile.TemporaryDirectory() as temp_dir:
+                proc = subprocess.run(
+                    ["python3", "-I", script_path],    # -I: isolated mode
+                    capture_output=True, text=True, timeout=30,
+                    cwd=temp_dir,                      # isolated working directory
+                    env={"PATH": "/usr/bin:/bin:/usr/local/bin"},  # minimal environment
+                )
             if proc.returncode != 0:
                 logger.warning(
                     "Seed code failed (rc=%d): %s", proc.returncode, proc.stderr[:200]
