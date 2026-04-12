@@ -226,11 +226,11 @@ class MutatorGenerator:
             # heuristic that double-indented already-indented lines.
             indented = textwrap.indent(textwrap.dedent(logic), "    ")
 
-            # Escape any literal braces in the generated code so that
-            # str.format() does not misinterpret dict literals or similar
-            # constructs (e.g. `d = {key: val}` → KeyError without escaping).
-            escaped_logic = indented.replace("{", "{{").replace("}", "}}")
-            content = MUTATOR_TEMPLATE.format(name=name, mutation_logic=escaped_logic)
+            # str.format() substitutes {mutation_logic} and {name} in the template
+            # and inserts their values as-is (single-pass — no re-scanning of
+            # substituted text). Braces inside `indented` (dict literals, f-strings,
+            # etc.) are therefore safe without any escaping.
+            content = MUTATOR_TEMPLATE.format(name=name, mutation_logic=indented)
 
             fpath = self.mutator_dir / f"mutator_{name}.py"
             fpath.write_text(content)
