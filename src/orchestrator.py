@@ -94,18 +94,52 @@ class Orchestrator:
         self.attention.compute(source_dir=source_dir, target_function=target_function)
         logger.info("[Pre-phase SA] Attention distance matrix cached")
 
+        def _configured_corpus_dir():
+            candidate_paths = []
+            for section_name in ("fuzzing", "afl", "aflpp"):
+                section = self.config.get(section_name, {})
+                if not isinstance(section, dict):
+                    continue
+                for key in ("corpus_dir", "input_dir", "seed_dir"):
+                    value = section.get(key)
+                    if value:
+                        candidate_paths.append(value)
+
+            for path_str in candidate_paths:
+                corpus_dir = Path(path_str)
+                if corpus_dir.exists():
+                    return corpus_dir
+
+            if candidate_paths:
+                return Path(candidate_paths[0])
+            return None
+
+        def _corpus_has_seed():
+            corpus_dir = _configured_corpus_dir()
+            if corpus_dir is None or not corpus_dir.exists() or not corpus_dir.is_dir():
+                return False
+            return any(entry.is_file() for entry in corpus_dir.iterdir())
+
         # ── Persistent Memory: check for cached pre-phase context ─────────────
         # If the LLM pre-phase was already run for this target, reload from disk
         # and skip all LLM calls (saves ~1-2 API calls per restart).
         cached_ctx = self.memory.load_pre_phase_ctx(target_function, bug_type)
         if cached_ctx is not None:
-            self._pre_phase_ctx = cached_ctx
-            logger.info(
-                "[Pre-phase] Restored from persistent memory — skipping LLM pre-phase. "
-                "Memory summary: %s",
-                self.memory.summary(),
+            if _corpus_has_seed():
+                self._pre_phase_ctx = cached_ctx
+                logger.info(
+                    "[Pre-phase] Restored from persistent memory — skipping LLM pre-phase. "
+                    "Memory summary: %s",
+                    self.memory.summary(),
+                )
+                return
+
+            logger.warning(
+                "[Pre-phase] Cached context found for %s/%s, but corpus directory is "
+                "missing or empty; regenerating pre-phase artifacts.",
+                target_function,
+                bug_type,
             )
-            return
 
         # ── Bug Information ───────────────────────────────────────────────────
         logger.info("[Pre-phase] Extracting bug information from report...")
