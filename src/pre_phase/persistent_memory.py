@@ -221,11 +221,16 @@ class PersistentMemory:
         history = self.get_reassessment_history()
         failed = []
         for entry in history:
+            if not isinstance(entry, dict):
+                continue
             delta = entry.get("confidence_delta")
             if delta is not None and delta <= 0:
+                hypothesis = entry.get("hypothesis", "")
+                if not isinstance(hypothesis, str):
+                    hypothesis = str(hypothesis)
                 desc = (
-                    f"[#{entry['id']}] {entry.get('stuck_type','?')}: "
-                    f"{entry.get('hypothesis', '')[:100]}"
+                    f"[#{entry.get('id', '?')}] {entry.get('stuck_type', '?')}: "
+                    f"{hypothesis[:100]}"
                 )
                 failed.append(desc)
         return failed
