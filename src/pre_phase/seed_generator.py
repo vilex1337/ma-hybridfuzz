@@ -20,7 +20,7 @@ logger = logging.getLogger("pre_phase.seed_gen")
 class SeedGenerator:
     def __init__(self, config: dict):
         self.config = config
-        self.corpus_dir = Path(config["paths"]["corpus"])
+        self.corpus_dir = Path(config["paths"]["corpus"]).resolve()
         self.corpus_dir.mkdir(parents=True, exist_ok=True)
 
     def write_seeds(self, seed_dicts: list[dict]) -> list[Path]:
@@ -95,7 +95,7 @@ class SeedGenerator:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".py", delete=False
         ) as tmp:
-            preamble = f"OUTPUT_PATH = {str(out_path)!r}\n"
+            preamble = f"OUTPUT_PATH = {str(out_path.resolve())!r}\n"
             tmp.write(preamble + code)
             script_path = tmp.name
 
