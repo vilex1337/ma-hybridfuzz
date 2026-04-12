@@ -38,10 +38,24 @@ from typing import Any, Optional
 logger = logging.getLogger("pre_phase.memory")
 
 # File names inside the memory directory
-_PRE_PHASE_FILE = "pre_phase_ctx.json"
+_PRE_PHASE_PREFIX = "pre_phase_"       # per-target files: pre_phase_<key>.json
 _REASSESSMENT_FILE = "reassessment_history.json"
 _COVERAGE_FILE = "coverage_snapshots.json"
 _META_FILE = "memory_meta.json"
+
+
+def _pre_phase_filename(target_function: str, bug_type: str) -> str:
+    """
+    Return a safe, unique filename for a (target_function, bug_type) pair.
+
+    Non-alphanumeric characters are replaced with underscores so the name
+    is valid on all file systems.  The double-underscore separator makes the
+    two components visually distinct without colliding.
+    """
+    def sanitize(s: str) -> str:
+        return "".join(c if c.isalnum() or c == "_" else "_" for c in s)
+
+    return f"{_PRE_PHASE_PREFIX}{sanitize(target_function)}__{sanitize(bug_type)}.json"
 
 
 class PersistentMemory:
@@ -88,7 +102,7 @@ class PersistentMemory:
             "saved_at": time.time(),
             "ctx": ctx,
         }
-        path = self._dir / _PRE_PHASE_FILE
+        path = self._dir / _pre_phase_filename(target_function, bug_type)
         path.write_text(json.dumps(payload, indent=2))
         logger.info("[Memory] Pre-phase context saved → %s", path)
 
@@ -101,24 +115,13 @@ class PersistentMemory:
         Returns None when no cache exists or the cache is for a different target,
         signalling the orchestrator to run the full pre-phase.
         """
-        path = self._dir / _PRE_PHASE_FILE
+        path = self._dir / _pre_phase_filename(target_function, bug_type)
         if not path.exists():
             return None
         try:
             payload = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("[Memory] Could not load pre-phase cache: %s", e)
-            return None
-
-        if (
-            payload.get("target_function") != target_function
-            or payload.get("bug_type") != bug_type
-        ):
-            logger.info(
-                "[Memory] Pre-phase cache is for a different target (%s / %s), ignoring.",
-                payload.get("target_function"),
-                payload.get("bug_type"),
-            )
             return None
 
         age_h = (time.time() - payload.get("saved_at", 0)) / 3600
@@ -129,12 +132,12 @@ class PersistentMemory:
         )
         return payload["ctx"]
 
-    def invalidate_pre_phase_ctx(self) -> None:
-        """Delete the pre-phase cache (e.g. when config changes)."""
-        path = self._dir / _PRE_PHASE_FILE
+    def invalidate_pre_phase_ctx(self, target_function: str, bug_type: str) -> None:
+        """Delete the per-target pre-phase cache (e.g. when config changes)."""
+        path = self._dir / _pre_phase_filename(target_function, bug_type)
         if path.exists():
             path.unlink()
-            logger.info("[Memory] Pre-phase context cache invalidated.")
+            logger.info("[Memory] Pre-phase context cache invalidated: %s", path.name)
 
     # -------------------------------------------------------------------------
     # 2. Reassessment history
@@ -293,10 +296,10 @@ class PersistentMemory:
         snapshots = self._load_json(_COVERAGE_FILE, default=[])
         if not isinstance(snapshots, list):
             snapshots = []
-        pre_phase_path = self._dir / _PRE_PHASE_FILE
+        pre_phase_files = list(self._dir.glob(f"{_PRE_PHASE_PREFIX}*.json"))
         return {
             "memory_dir": str(self._dir),
-            "pre_phase_cached": pre_phase_path.exists(),
+            "pre_phase_cached": len(pre_phase_files),
             "reassessment_count": len(history),
             "failed_strategies": len(self.get_failed_strategies()),
             "coverage_snapshots": len(snapshots),
@@ -309,7 +312,7 @@ class PersistentMemory:
         meta = {
             "description": "MA-HybridFuzz persistent memory store",
             "files": {
-                _PRE_PHASE_FILE: "Cached pre-phase LLM context (bug_info, target_summary, program_usage)",
+                f"{_PRE_PHASE_PREFIX}<target>__<bug_type>.json": "Per-target pre-phase LLM context (bug_info, target_summary, program_usage)",
                 _REASSESSMENT_FILE: "History of on-demand reassessment events with confidence deltas",
                 _COVERAGE_FILE: "Periodic AFL++ coverage snapshots for trend analysis",
             },
