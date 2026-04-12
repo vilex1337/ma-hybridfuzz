@@ -271,11 +271,11 @@ class Orchestrator:
                     program_usage=program_usage,
                 )
                 if result.get("seed_content") or result.get("seed_code"):
-                    seeds.append(result)
+                    seeds.append(self._normalize_seed(result))
                     # Also add any candidates for ambiguous branches
                     for candidate in result.get("candidate_seeds", []):
                         if candidate.get("seed_content") or candidate.get("seed_code"):
-                            seeds.append(candidate)
+                            seeds.append(self._normalize_seed(candidate))
                 current_description = result.get(
                     "modification_rationale", current_description
                 )
@@ -300,9 +300,30 @@ class Orchestrator:
                     program_usage=program_usage,
                 )
                 if result.get("seed_content") or result.get("seed_code"):
-                    seeds.append(result)
+                    seeds.append(self._normalize_seed(result))
 
         return seeds
+
+    @staticmethod
+    def _normalize_seed(seed: dict) -> dict:
+        """
+        Normalise a seed dict returned by ReasoningAgent so it matches the
+        schema expected by SeedGenerator.write_seeds():
+
+        ReasoningAgent returns         SeedGenerator expects
+        ─────────────────────────────  ─────────────────────────────
+        description                 -> seed_description
+        seed_code present            -> seed_type = "code"
+        seed_content present (only)  -> seed_type = "string"
+        """
+        seed = dict(seed)  # shallow copy – do not mutate the original
+        # Map 'description' -> 'seed_description' when the canonical key is absent
+        if "seed_description" not in seed and "description" in seed:
+            seed["seed_description"] = seed["description"]
+        # Infer seed_type when missing
+        if "seed_type" not in seed:
+            seed["seed_type"] = "code" if seed.get("seed_code") else "string"
+        return seed
 
     def _load_function_source(self, source_dir: str, func_name: str) -> dict:
         """
