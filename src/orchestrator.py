@@ -17,6 +17,7 @@ from pre_phase.persistent_memory import PersistentMemory
 from pre_phase.seed_generator import SeedGenerator
 from pre_phase.mutator_generator import MutatorGenerator
 from pre_phase.attention_computer import AttentionComputer
+from pre_phase.call_chain_extractor import CallChainExtractor
 from fuzzing.afl_runner import AFLRunner
 from fuzzing.scheduler import AttentionScheduler
 
@@ -50,6 +51,7 @@ class Orchestrator:
         self.seed_gen = SeedGenerator(self.config)
         self.mutator_gen = MutatorGenerator(self.config)
         self.attention = AttentionComputer(self.config)
+        self.call_chain = CallChainExtractor(self.config)
         self.afl = AFLRunner(self.config)
         self.scheduler = AttentionScheduler(self.config)
 
@@ -85,8 +87,57 @@ class Orchestrator:
         source_dir = self.config["target"]["source_dir"]
         bug_report = self.config["target"].get("bug_report", "")
         program_usage = self.config["target"].get("program_usage", "")
-        fcc = self.config["target"].get("fcc", [])  # list of function names, entry -> target
         bug_type = self.config["target"]["bug_type"]
+
+        # ── FCC: Function Call Chain ──────────────────────────────────────────
+        # Resolution order (first match wins):
+        #   1. Explicit list in config  → user override, always respected.
+        #   2. Persistent memory cache  → skip re-extraction on restart.
+        #   3. Clang AST extraction     → static analysis, result is cached.
+        #   4. Empty list               → fall back to functionality-based mode.
+        fcc: list[str] = self.config["target"].get("fcc", [])
+
+        if fcc:
+            logger.info(
+                "[Pre-phase FCC] Using config-supplied FCC (%d hops): %s",
+                len(fcc) - 1,
+                " -> ".join(fcc),
+            )
+        else:
+            # Try persistent memory before running the (potentially slow) AST walk.
+            cached_fcc = self.memory.load_fcc(target_function, bug_type)
+            if cached_fcc is not None:
+                fcc = cached_fcc
+                logger.info(
+                    "[Pre-phase FCC] Restored FCC from persistent memory (%d hops): %s",
+                    len(fcc) - 1,
+                    " -> ".join(fcc),
+                )
+            else:
+                compile_commands_dir = self.config["target"].get("compile_commands_dir")
+                logger.info(
+                    "[Pre-phase FCC] No cached FCC — extracting from Clang AST "
+                    "(source_dir=%s, target=%s)...",
+                    source_dir,
+                    target_function,
+                )
+                fcc = self.call_chain.extract(
+                    source_dir=source_dir,
+                    target_function=target_function,
+                    compile_commands_dir=compile_commands_dir,
+                )
+                if fcc:
+                    logger.info(
+                        "[Pre-phase FCC] Extracted call chain (%d hops): %s",
+                        len(fcc) - 1,
+                        " -> ".join(fcc),
+                    )
+                    self.memory.save_fcc(target_function, bug_type, fcc)
+                else:
+                    logger.warning(
+                        "[Pre-phase FCC] Could not extract call chain; "
+                        "reasoning will fall back to functionality-based mode."
+                    )
 
         # ── SA: Static Analysis ───────────────────────────────────────────────
         # Compute attention distance matrix (uses Clang-AST-derived call graph)
