@@ -7,7 +7,7 @@ target:
   bug_type: ""         # e.g., buffer_overflow, use_after_free, integer_overflow
 
 llm:
-  model: "claude-sonnet-4-20250514"
+  model: "claude-sonnet-4-6"
   max_tokens: 4096
   temperature: 0.3
 
@@ -36,3 +36,4 @@ paths:
   distance_cache: "/workspace/distance_cache"
   coverage: "/workspace/coverage"
   logs: "/workspace/logs"
+  memory: "/workspace/memory"       # persistent memory: pre-phase cache, reassessment history, coverage snapshots
