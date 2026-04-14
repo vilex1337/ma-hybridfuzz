@@ -7,6 +7,15 @@ target:
   bug_type: ""         # e.g., buffer_overflow, use_after_free, integer_overflow
 
 llm:
+  # Provider: anthropic | openai | gemini
+  #   anthropic → requires ANTHROPIC_API_KEY
+  #   openai    → requires OPENAI_API_KEY  (Codex API key)
+  #   gemini    → requires GEMINI_API_KEY  (or GOOGLE_API_KEY)
+  provider: "anthropic"
+  # Popular model IDs per provider (pick one that matches `provider`):
+  #   anthropic: claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5
+  #   openai:    gpt-5, gpt-5-mini, gpt-4o, gpt-4o-mini, o1, o1-mini
+  #   gemini:    gemini-2.5-pro, gemini-2.5-flash, gemini-2.0-flash, gemini-1.5-flash
   model: "claude-sonnet-4-6"
   max_tokens: 4096
   temperature: 0.3
