@@ -1,5 +1,42 @@
-# Environment
+# Environment / secrets — never commit
 .env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+credentials/
+
+# Shell / REPL / CLI history (may capture env var echoes or pasted keys)
+.bash_history
+.zsh_history
+.python_history
+.node_repl_history
+.lesshst
+.viminfo
+**/history.jsonl
+**/*.history
+**/*_history
+
+# Log files (may embed prompts or env values at debug level)
+*.log
+**/*.log
+
+# IDE / AI assistant caches
+.ipynb_checkpoints/
+
+# Local-only context / prompt artefacts (not for the repo)
+task.txt
+image.png
+image.jpg
+image.jpeg
+image.webp
+.claude/
+.codex/
+.cursor/
+
+# Local test setup (harness, targets, sample configs — not shipped)
+test_dir/
 
 # Workspace (runtime data)
 workspace/corpus/*
@@ -9,6 +46,7 @@ workspace/distance_cache/*
 workspace/coverage/*
 workspace/logs/*
 workspace/instrumented/*
+workspace/memory/*
 !workspace/*/.gitkeep
 
 # Python
@@ -19,6 +57,13 @@ __pycache__/
 dist/
 build/
 .venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
 
 # IDE
 .vscode/
