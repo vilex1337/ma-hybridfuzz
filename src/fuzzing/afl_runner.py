@@ -93,6 +93,17 @@ class AFLRunner:
         """Start AFL++ fuzzing session."""
         self._output_dir = crashes_dir
 
+        # Environment variables AFL++ needs in containerised / restricted
+        # environments. Without these the fuzzer prints a warning and exits
+        # immediately on most distros.
+        env = os.environ.copy()
+        env.setdefault("AFL_SKIP_CPUFREQ", "1")             # skip governor check
+        env.setdefault("AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES", "1")  # skip core_pattern exit
+        env.setdefault("AFL_NO_AFFINITY", "1")              # skip CPU binding in containers
+        env.setdefault("AFL_AUTORESUME", "1")               # resume instead of refusing non-empty out
+        # ASAN sometimes reports false leaks at exit; disabling that reduces noise.
+        env.setdefault("ASAN_OPTIONS", "abort_on_error=1:symbolize=0:detect_leaks=0")
+
         # Build AFL++ command
         cmd = [
             "afl-fuzz",
@@ -107,8 +118,8 @@ class AFLRunner:
         if mutator_files:
             # Use the first mutator as primary
             env_mutator = str(mutator_files[0])
-            os.environ["AFL_CUSTOM_MUTATOR_LIBRARY"] = ""
-            os.environ["AFL_PYTHON_MODULE"] = env_mutator
+            env["AFL_CUSTOM_MUTATOR_LIBRARY"] = ""
+            env["AFL_PYTHON_MODULE"] = env_mutator
             logger.info("Using custom mutator: %s", env_mutator)
 
         # Power schedule - use attention-guided if scheduler available
@@ -117,35 +128,59 @@ class AFLRunner:
             # Write distance file for AFL++ if supported
             distance_file = scheduler.export_afl_distance_file()
             if distance_file:
-                os.environ["AFL_DISTANCE_FILE"] = distance_file
+                env["AFL_DISTANCE_FILE"] = distance_file
         else:
             cmd.extend(["-p", "fast"])
 
         cmd.extend(["--", instrumented_binary, "@@"])
 
+        # Stream AFL++ stdout+stderr to a log file so we can see why it
+        # died (e.g. bad core_pattern, calibration failure, bad instrumentation).
+        log_path = Path(self.config["paths"]["logs"]) / "afl_fuzz.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._afl_log = open(log_path, "w")
+        logger.info("AFL++ output → %s", log_path)
         logger.info("Starting AFL++: %s", " ".join(cmd))
         self._process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=self._afl_log,
+            stderr=subprocess.STDOUT,
+            env=env,
         )
         logger.info("AFL++ started with PID %d", self._process.pid)
 
     def stop(self):
         """Stop the AFL++ process."""
         if self._process:
-            logger.info("Stopping AFL++ (PID %d)...", self._process.pid)
-            self._process.send_signal(signal.SIGINT)
-            try:
-                self._process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-                self._process.wait()
-            logger.info("AFL++ stopped")
+            rc = self._process.poll()
+            if rc is not None:
+                logger.warning(
+                    "AFL++ already exited before stop() (rc=%d). Check afl_fuzz.log.", rc,
+                )
+            else:
+                logger.info("Stopping AFL++ (PID %d)...", self._process.pid)
+                self._process.send_signal(signal.SIGINT)
+                try:
+                    self._process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                    self._process.wait()
+            logger.info("AFL++ stopped (rc=%d)", self._process.returncode)
+        if getattr(self, "_afl_log", None):
+            self._afl_log.close()
 
     def get_stats(self) -> dict | None:
         """Read AFL++ fuzzer_stats file."""
         if not self._output_dir:
+            return None
+
+        # Early warning if the fuzzer died
+        if self._process is not None and self._process.poll() is not None:
+            logger.error(
+                "AFL++ exited unexpectedly with rc=%d. See %s for details.",
+                self._process.returncode,
+                Path(self.config["paths"]["logs"]) / "afl_fuzz.log",
+            )
             return None
 
         stats_path = Path(self._output_dir) / "default" / "fuzzer_stats"
