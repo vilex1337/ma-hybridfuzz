@@ -8,8 +8,8 @@ import logging
 import textwrap
 from pathlib import Path
 
-import anthropic
-from anthropic.types import TextBlock
+from llm.provider import create_provider
+from pre_phase.base_agent import _escape_controls_in_strings
 
 logger = logging.getLogger("pre_phase.mutator_gen")
 
@@ -46,8 +46,8 @@ def describe(max_description_length):
 class MutatorGenerator:
     def __init__(self, config: dict):
         self.config = config
-        self.client = anthropic.Anthropic()
-        self.model = config["llm"]["model"]
+        self.provider = create_provider(config)
+        self.model = self.provider.model
         self.mutator_dir = Path(config["paths"]["mutators"])
         self.mutator_dir.mkdir(parents=True, exist_ok=True)
 
@@ -83,14 +83,10 @@ class MutatorGenerator:
             trigger_conditions=trigger_conditions,
         )
         try:
-            analysis_response = self.client.messages.create(
-                model=self.model,
+            bug_analysis_text = self.provider.generate(
+                prompt=bug_analysis_prompt,
                 max_tokens=self.config["llm"]["max_tokens"],
                 temperature=0.2,
-                messages=[{"role": "user", "content": bug_analysis_prompt}],
-            )
-            bug_analysis_text = next(
-                (b.text for b in analysis_response.content if isinstance(b, TextBlock)), ""
             )
         except Exception as e:
             logger.error("Bug analysis LLM call failed: %s", e)
@@ -101,16 +97,13 @@ class MutatorGenerator:
             bug_type=bug_type,
             bug_analysis=bug_analysis_text,
         )
-        response = self.client.messages.create(
-            model=self.model,
+        response_text = self.provider.generate(
+            prompt=mutator_prompt,
             max_tokens=self.config["llm"]["max_tokens"],
             temperature=self.config["llm"]["temperature"],
-            messages=[{"role": "user", "content": mutator_prompt}],
         )
 
-        mutators = self._parse_mutators(
-            next((b.text for b in response.content if isinstance(b, TextBlock)), "")
-        )
+        mutators = self._parse_mutators(response_text)
         saved = self._save_mutators(mutators)
         return saved
 
@@ -202,16 +195,22 @@ class MutatorGenerator:
         )
 
     def _parse_mutators(self, text: str) -> list[dict]:
-        try:
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0]
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0]
-            data = json.loads(text.strip())
-            return data.get("mutators", [])
-        except (json.JSONDecodeError, IndexError) as e:
-            logger.error("Failed to parse mutator response: %s", e)
-            return []
+        # Strip markdown fence if present
+        if "```json" in text:
+            text = text.split("```json", 1)[1].split("```", 1)[0]
+        elif "```" in text:
+            text = text.split("```", 1)[1].split("```", 1)[0]
+        payload = text.strip()
+        # Retry with control-char escaping inside strings — LLMs often return
+        # Python code in string values with bare newlines.
+        for attempt in (payload, _escape_controls_in_strings(payload)):
+            try:
+                data = json.loads(attempt)
+                return data.get("mutators", []) if isinstance(data, dict) else []
+            except json.JSONDecodeError:
+                continue
+        logger.error("Failed to parse mutator response (both strict and repaired).")
+        return []
 
     def _save_mutators(self, mutators: list[dict]) -> list[Path]:
         saved = []
