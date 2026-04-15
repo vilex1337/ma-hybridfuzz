@@ -24,5 +24,9 @@ COPY src/ /opt/mahybridfuzz/src/
 COPY configs/ /opt/mahybridfuzz/configs/
 
 WORKDIR /opt/mahybridfuzz
+ENV PYTHONPATH=/opt/mahybridfuzz/src
 
-ENTRYPOINT ["python3", "src/orchestrator.py"]
+# No ENTRYPOINT — the command is supplied by docker-compose.yml or via
+# `docker compose run fuzzer <cmd>`.  Keeping a default CMD so plain
+# `docker run` still boots the orchestrator.
+CMD ["python3", "src/orchestrator.py", "-c", "configs/default.yml"]
