@@ -8,8 +8,9 @@ import logging
 import pickle
 from pathlib import Path
 
-import anthropic
 import numpy as np
+
+from llm.provider import create_provider
 
 logger = logging.getLogger("pre_phase.attention")
 
@@ -17,8 +18,8 @@ logger = logging.getLogger("pre_phase.attention")
 class AttentionComputer:
     def __init__(self, config: dict):
         self.config = config
-        self.client = anthropic.Anthropic()
-        self.model = config["llm"]["model"]
+        self.provider = create_provider(config)
+        self.model = self.provider.model
         self.cache_dir = Path(config["paths"]["distance_cache"])
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._matrix = None
@@ -93,6 +94,43 @@ class AttentionComputer:
             return float(self._matrix[src_idx][dst_idx])
         except ValueError:
             return float("inf")
+
+    def get_neighbors(self, target_function: str, top_k: int = 3) -> list[str]:
+        """Return the top-k functions closest to *target_function* by attention distance.
+
+        Used by the orchestrator when no complete FCC is available (RANDLUZZ §3.3.3):
+        the closest neighbors serve as intermediate reasoning anchors for
+        functionality-based seed generation.
+
+        Returns an empty list when no distance matrix has been computed yet.
+        """
+        if self._matrix is None or self._functions is None:
+            logger.warning("get_neighbors called before distance matrix is computed")
+            return []
+
+        if target_function not in self._functions:
+            logger.warning("Target function '%s' not found in distance matrix", target_function)
+            return []
+
+        target_idx = self._functions.index(target_function)
+        # Column (or row — matrix is symmetric) of distances to the target
+        distances = self._matrix[:, target_idx]
+
+        # Pair each function with its distance, excluding the target itself
+        scored = [
+            (self._functions[i], float(distances[i]))
+            for i in range(len(self._functions))
+            if i != target_idx and np.isfinite(distances[i])
+        ]
+        scored.sort(key=lambda pair: pair[1])
+
+        neighbors = [name for name, _ in scored[:top_k]]
+        logger.info(
+            "Nearest neighbors for '%s': %s",
+            target_function,
+            [(n, f"{d:.3f}") for n, d in scored[:top_k]],
+        )
+        return neighbors
 
     def _extract_functions(self, source_dir: str) -> dict[str, str]:
         """Extract function names and their bodies from source code."""
@@ -190,14 +228,13 @@ For each function, rate its semantic distance to "{target}" on a scale of 0.0 to
 Return a JSON object mapping function_name -> distance_score.
 Return ONLY valid JSON."""
 
-            response = self.client.messages.create(
-                model=self.model,
+            text = self.provider.generate(
+                prompt=prompt,
                 max_tokens=2048,
                 temperature=0.1,
-                messages=[{"role": "user", "content": prompt}],
             )
 
-            distances = self._parse_distances(response.content[0].text)
+            distances = self._parse_distances(text)
 
             target_idx = func_names.index(target) if target in func_names else -1
             for name, dist in distances.items():
