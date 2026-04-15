@@ -601,9 +601,19 @@ class Orchestrator:
 
     def _report_results(self):
         crashes_dir = Path(self.config["paths"]["crashes"])
-        crash_files = list(crashes_dir.glob("id:*")) if crashes_dir.exists() else []
+        # AFL++ writes crashes under <out>/default/crashes/id:* (when launched
+        # with default fuzzer ID) or <out>/<name>/crashes/id:* for named runs.
+        # Fall back to a recursive glob so we count crashes regardless of layout.
+        crash_files = (
+            list(crashes_dir.rglob("crashes/id:*")) if crashes_dir.exists() else []
+        )
         logger.info("=== Results ===")
         logger.info("Total crashes found: %d", len(crash_files))
+        if crash_files:
+            for f in crash_files[:10]:
+                logger.info("  - %s", f.relative_to(crashes_dir))
+            if len(crash_files) > 10:
+                logger.info("  ... and %d more", len(crash_files) - 10)
         logger.info("Crashes directory: %s", crashes_dir)
         logger.info("Logs: %s", self.config["paths"]["logs"])
 
