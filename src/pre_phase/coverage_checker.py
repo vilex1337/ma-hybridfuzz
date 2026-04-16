@@ -93,7 +93,13 @@ class CoverageChecker:
             )
             return True
 
-        out_binary = str(Path(reference_binary).with_suffix("")) + "_covbuild"
+        reference_binary_path = Path(reference_binary)
+        out_binary_base = (
+            reference_binary_path.with_suffix("")
+            if reference_binary_path.suffix
+            else reference_binary_path
+        )
+        out_binary = str(out_binary_base) + "_covbuild"
         success = self._compile_coverage_binary(source_dir, out_binary)
         if success:
             self._cov_binary = out_binary
