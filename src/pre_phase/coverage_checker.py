@@ -351,8 +351,11 @@ class CoverageChecker:
         if self._cov_binary and Path(self._cov_binary).exists():
             return self._cov_binary
 
+        reference_path = Path(reference_binary)
+        base_path = reference_path.parent / reference_path.name
+
         for suffix in ("_covbuild", ".cov"):
-            candidate = str(Path(reference_binary).with_suffix("")) + suffix
+            candidate = str(base_path) + suffix
             if Path(candidate).exists():
                 return candidate
 
