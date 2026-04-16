@@ -408,7 +408,40 @@ class Orchestrator:
             return seeds
 
         # ── Step 4: ONE reason_along_fcc LLM call ───────────────────────────
+        # Guard: the FCC must end with target_function and derived_fn must not
+        # be the last element.  Either condition failing means the FCC is
+        # misconfigured or truncated → fall back to functionality-based mode.
+        if fcc[-1] != target_function:
+            logger.warning(
+                "[Pre-phase Opt] FCC does not end with target function '%s' "
+                "(last entry is '%s') — falling back to functionality-based mode.",
+                target_function,
+                fcc[-1],
+            )
+            return self._fallback_functionality_seeds(
+                target_function=target_function,
+                target_summary=target_summary,
+                source_dir=source_dir,
+                program_usage=program_usage,
+                existing_seeds=seeds,
+            )
+
         derived_idx = fcc.index(derived_fn)
+        if derived_idx + 1 >= len(fcc):
+            logger.warning(
+                "[Pre-phase Opt] derived_fn '%s' is the last entry in FCC "
+                "but target_function check was not triggered — falling back "
+                "to functionality-based mode.",
+                derived_fn,
+            )
+            return self._fallback_functionality_seeds(
+                target_function=target_function,
+                target_summary=target_summary,
+                source_dir=source_dir,
+                program_usage=program_usage,
+                existing_seeds=seeds,
+            )
+
         goal_fn = fcc[derived_idx + 1]
 
         logger.info(
