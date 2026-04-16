@@ -18,6 +18,7 @@ from pre_phase.seed_generator import SeedGenerator
 from pre_phase.mutator_generator import MutatorGenerator
 from pre_phase.attention_computer import AttentionComputer
 from pre_phase.call_chain_extractor import CallChainExtractor
+from pre_phase.coverage_checker import CoverageChecker
 from fuzzing.afl_runner import AFLRunner
 from fuzzing.scheduler import AttentionScheduler
 
@@ -52,6 +53,7 @@ class Orchestrator:
         self.mutator_gen = MutatorGenerator(self.config)
         self.attention = AttentionComputer(self.config)
         self.call_chain = CallChainExtractor(self.config)
+        self.coverage_checker = CoverageChecker(self.config)
         self.afl = AFLRunner(self.config)
         self.scheduler = AttentionScheduler(self.config)
 
@@ -62,7 +64,7 @@ class Orchestrator:
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
 
-    def _handle_signal(self, signum, frame):
+    def _handle_signal(self, signum, _frame):
         logger.info("Received signal %d, shutting down...", signum)
         self._running = False
 
@@ -144,6 +146,24 @@ class Orchestrator:
         logger.info("[Pre-phase SA] Computing attention distance matrix...")
         self.attention.compute(source_dir=source_dir, target_function=target_function)
         logger.info("[Pre-phase SA] Attention distance matrix cached")
+
+        # ── Coverage Binary ───────────────────────────────────────────────────
+        # Build the LLVM source-coverage binary used by CoverageChecker to
+        # determine which functions a seed reaches at runtime (RANDLUZZ §3.3.2).
+        # This is separate from the AFL++ fuzzing binary.
+        binary = self.config["target"].get("binary", "")
+        logger.info("[Pre-phase Coverage] Building coverage-instrumented binary...")
+        cov_ok = self.coverage_checker.build(
+            source_dir=source_dir,
+            reference_binary=binary,
+        )
+        if cov_ok:
+            logger.info("[Pre-phase Coverage] Coverage binary ready")
+        else:
+            logger.warning(
+                "[Pre-phase Coverage] Coverage binary build failed — "
+                "seed reasoning will use conservative fallback (entry only)"
+            )
 
         def _configured_corpus_dir():
             candidate_paths = []
@@ -288,72 +308,234 @@ class Orchestrator:
         self,
         preliminary_seed: dict,
         fcc: list[str],
-        fcc_summaries: dict[str, dict],
+        fcc_summaries: dict[str, dict],  # noqa: ARG002 – reserved for future use
         target_function: str,
         target_summary: dict,
         source_dir: str,
         program_usage: str,
     ) -> list[dict]:
         """
-        Generate reachable seeds following RANDLUZZ §3.3.2 / §3.3.3.
+        Generate reachable seeds using RANDLUZZ §3.3.2 with runtime-derived
+        deviation detection.
 
-        If a complete FCC is available, reason iteratively along it.
-        Otherwise fall back to functionality-based reasoning with neighbor functions.
+        RANDLUZZ §3.3.2 (Figure 6):
+          1. Run the preliminary seed → record the execution path.
+          2. Compare execution path against the static fastest path (BFS).
+          3. The 'derived function' = deepest function in the fastest path
+             that was actually reached at runtime.
+          4. Make ONE reason_along_fcc call: derived_fn → next_fn_in_path.
+
+        This replaces the old approach that iterated over every static FCC
+        hop with a separate LLM call per hop.  Now:
+          - The LLM is called ONCE for seed reasoning (derived_fn → goal_fn).
+          - The deviation point is determined by RUNTIME coverage, not static.
+
+        Example
+        -------
+        Fastest path:  A → B → D → E → Target
+        Coverage shows A, B, C reached (C is off-path)
+        → derived_fn = B  (last hit before first miss in fastest path)
+        → goal_fn    = D  (next after B)
+        → ONE call:   reason_along_fcc(deviation=B, goal=D)
+
+        Falls back to functionality-based reasoning (§3.3.3) when no fastest
+        path is available (e.g. disconnected call graph due to indirect calls).
         """
         seeds = [preliminary_seed]
 
-        if len(fcc) >= 2:
-            # §3.3.2 - complete FCC available: iterate from entry toward target
-            logger.info("[Pre-phase Opt] Reasoning along FCC (%d hops)...", len(fcc) - 1)
-            current_description = (
+        if len(fcc) < 2:
+            # §3.3.3 – no path found: reason from target's neighbours
+            return self._fallback_functionality_seeds(
+                target_function=target_function,
+                target_summary=target_summary,
+                source_dir=source_dir,
+                program_usage=program_usage,
+                existing_seeds=seeds,
+            )
+
+        logger.info(
+            "[Pre-phase Opt] Fastest path (%d hops): %s",
+            len(fcc) - 1,
+            " -> ".join(fcc),
+        )
+
+        # ── Step 1: Materialise preliminary seed to a temp file ──────────────
+        binary = self.config["target"].get("binary", "")
+        temp_seed = self._materialize_seed_temp(preliminary_seed)
+
+        if temp_seed is None:
+            logger.warning(
+                "[Pre-phase Opt] Cannot materialise preliminary seed — "
+                "assuming only entry function was reached"
+            )
+            reached: set[str] = {fcc[0]}
+        else:
+            # ── Step 2: Runtime coverage check ──────────────────────────────
+            try:
+                reached = self.coverage_checker.check_reached_functions(
+                    binary=binary,
+                    seed_file=str(temp_seed),
+                    candidate_functions=fcc,
+                )
+            finally:
+                temp_seed.unlink(missing_ok=True)
+
+        # ── Step 3: Identify derived function ───────────────────────────────
+        # Walk fastest path; stop at first function NOT reached at runtime.
+        # The last reached function before the gap = derived function.
+        derived_fn = self._find_derived_function(fcc, reached)
+
+        if derived_fn is None:
+            derived_fn = fcc[0]
+            logger.info(
+                "[Pre-phase Opt] No path function reached by seed — "
+                "starting from entry: %s",
+                derived_fn,
+            )
+        else:
+            logger.info(
+                "[Pre-phase Opt] Coverage: %s | derived_fn=%s",
+                sorted(reached & set(fcc)),
+                derived_fn,
+            )
+
+        if derived_fn == target_function:
+            logger.info(
+                "[Pre-phase Opt] Preliminary seed already reaches the target '%s' "
+                "— no FCC reasoning needed",
+                target_function,
+            )
+            return seeds
+
+        # ── Step 4: ONE reason_along_fcc LLM call ───────────────────────────
+        derived_idx = fcc.index(derived_fn)
+        goal_fn = fcc[derived_idx + 1]
+
+        logger.info(
+            "[Pre-phase Opt] Reasoning along FCC: %s → %s (target: %s)",
+            derived_fn,
+            goal_fn,
+            target_function,
+        )
+
+        deviation_src = self._load_function_source(source_dir, derived_fn)
+        result = self.reasoning.reason_along_fcc(
+            current_input_description=(
                 f"{preliminary_seed.get('seed_description', 'preliminary seed')} "
                 f"(format: {preliminary_seed.get('input_format', 'unknown')})"
-            )
-            for i in range(len(fcc) - 1):
-                deviation_name = fcc[i]
-                goal_name = fcc[i + 1]
-                deviation_src = self._load_function_source(source_dir, deviation_name)
-                result = self.reasoning.reason_along_fcc(
-                    current_input_description=current_description,
-                    deviation_function_name=deviation_name,
-                    deviation_function_body=deviation_src.get("body", ""),
-                    examined_lines=deviation_src.get("key_lines", []),
-                    goal_function_name=goal_name,
-                    program_usage=program_usage,
-                )
-                if result.get("seed_content") or result.get("seed_code"):
-                    seeds.append(self._normalize_seed(result))
-                    # Also add any candidates for ambiguous branches
-                    for candidate in result.get("candidate_seeds", []):
-                        if candidate.get("seed_content") or candidate.get("seed_code"):
-                            seeds.append(self._normalize_seed(candidate))
-                current_description = result.get(
-                    "modification_rationale", current_description
-                )
-        else:
-            # §3.3.3 - incomplete FCC: reason based on neighbor functionality
-            logger.info(
-                "[Pre-phase Opt] FCC unavailable, reasoning based on neighbor functionality..."
-            )
-            neighbor_names = self.attention.get_neighbors(target_function, top_k=3)
-            for neighbor_name in neighbor_names:
-                neighbor_src = self._load_function_source(source_dir, neighbor_name)
-                neighbor_summary = self.reasoning.summarize_function(
-                    func_name=neighbor_name,
-                    func_declaration=neighbor_src.get("declaration", ""),
-                    func_body=neighbor_src.get("body", ""),
-                )
-                result = self.reasoning.reason_based_on_functionality(
-                    target_function=target_function,
-                    target_func_summary=target_summary,
-                    neighbor_function_name=neighbor_name,
-                    neighbor_func_summary=neighbor_summary,
-                    program_usage=program_usage,
-                )
-                if result.get("seed_content") or result.get("seed_code"):
-                    seeds.append(self._normalize_seed(result))
+            ),
+            deviation_function_name=derived_fn,
+            deviation_function_body=deviation_src.get("body", ""),
+            examined_lines=deviation_src.get("key_lines", []),
+            goal_function_name=goal_fn,
+            program_usage=program_usage,
+        )
+
+        if result.get("seed_content") or result.get("seed_code"):
+            seeds.append(self._normalize_seed(result))
+            for candidate in result.get("candidate_seeds", []):
+                if candidate.get("seed_content") or candidate.get("seed_code"):
+                    seeds.append(self._normalize_seed(candidate))
 
         return seeds
+
+    def _fallback_functionality_seeds(
+        self,
+        target_function: str,
+        target_summary: dict,
+        source_dir: str,
+        program_usage: str,
+        existing_seeds: list[dict],
+    ) -> list[dict]:
+        """
+        §3.3.3 fallback: reason from the target's neighbour functions when
+        no fastest path exists (indirect calls, incomplete call graph).
+        """
+        logger.info(
+            "[Pre-phase Opt] No fastest path — reasoning from neighbour functions"
+        )
+        seeds = list(existing_seeds)
+        neighbor_names = self.attention.get_neighbors(target_function, top_k=3)
+        for neighbor_name in neighbor_names:
+            neighbor_src = self._load_function_source(source_dir, neighbor_name)
+            neighbor_summary = self.reasoning.summarize_function(
+                func_name=neighbor_name,
+                func_declaration=neighbor_src.get("declaration", ""),
+                func_body=neighbor_src.get("body", ""),
+            )
+            result = self.reasoning.reason_based_on_functionality(
+                target_function=target_function,
+                target_func_summary=target_summary,
+                neighbor_function_name=neighbor_name,
+                neighbor_func_summary=neighbor_summary,
+                program_usage=program_usage,
+            )
+            if result.get("seed_content") or result.get("seed_code"):
+                seeds.append(self._normalize_seed(result))
+        return seeds
+
+    @staticmethod
+    def _find_derived_function(
+        fastest_path: list[str], reached: set[str]
+    ) -> str | None:
+        """
+        Return the deepest function along *fastest_path* that was reached at
+        runtime.
+
+        Walk *fastest_path* in order; stop at the first function NOT in
+        *reached*.  The last reached function before the gap is the 'derived
+        function'.
+
+        Example::
+
+            fastest_path = [A, B, D, E, Target]
+            reached      = {A, B, C}   # C is off-path
+            → returns B                # D is first miss; B is last hit
+
+        Returns None when nothing in the path was reached.
+        """
+        derived: str | None = None
+        for fn in fastest_path:
+            if fn in reached:
+                derived = fn
+            else:
+                break   # first miss in the ordered fastest path
+        return derived
+
+    def _materialize_seed_temp(self, seed_dict: dict) -> Path | None:
+        """
+        Write a seed dict (produced by ReasoningAgent) to a temporary file
+        and return its Path.  Returns None on failure; caller must delete.
+
+        Handles both seed_type == "string" (direct content) and
+        seed_type == "code" (Python script that generates the file).
+        """
+        seed_type = seed_dict.get("seed_type", "string")
+
+        if seed_type == "string":
+            content = (seed_dict.get("seed_content") or "").encode()
+            if not content:
+                content = b"\x00"   # minimal non-empty placeholder
+            import tempfile
+            with tempfile.NamedTemporaryFile(
+                suffix="_probe_seed", delete=False
+            ) as tmp:
+                tmp.write(content)
+                return Path(tmp.name)
+
+        if seed_type == "code":
+            code = seed_dict.get("seed_code", "")
+            if not code:
+                return None
+            import tempfile
+            with tempfile.NamedTemporaryFile(
+                suffix="_probe_seed", delete=False
+            ) as tmp:
+                out_path = Path(tmp.name)
+            result = self.seed_gen._run_seed_code(code, out_path)
+            return result   # Path or None
+
+        return None
 
     @staticmethod
     def _normalize_seed(seed: dict) -> dict:
