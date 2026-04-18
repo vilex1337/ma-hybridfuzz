@@ -236,6 +236,13 @@ class CoverageChecker:
         """
         Execute *cov_binary* with *seed_file* as input and return the path
         to the raw profile file, or None on failure.
+
+        Input delivery is controlled by ``target.args`` in config (AFL++ ``@@``
+        convention):
+        - If ``@@`` appears in ``target.args``, the seed path replaces ``@@``
+          in the argv list and stdin is left closed.
+        - Otherwise the seed is piped to the binary's stdin (the binary is
+          invoked with no extra arguments).
         """
         with tempfile.NamedTemporaryFile(suffix=".profraw", delete=False) as tmp:
             profraw = tmp.name
@@ -243,15 +250,33 @@ class CoverageChecker:
         env = {**os.environ, "LLVM_PROFILE_FILE": profraw}
         seed_path = str(Path(seed_file).resolve())
 
+        # Build command and determine stdin source from config args.
+        raw_args: list[str] = self.config.get("target", {}).get("args", ["@@"])
+        if "@@" in raw_args:
+            cmd = [cov_binary] + [seed_path if a == "@@" else a for a in raw_args]
+            stdin_src = None
+        else:
+            cmd = [cov_binary] + raw_args
+            stdin_src = seed_path
+
         try:
-            subprocess.run(
-                [cov_binary, seed_path],
-                stdin=open(seed_path, "rb"),
-                capture_output=True,
-                timeout=timeout,
-                env=env,
-            )
-            # The profile is written on normal AND crash exit; check it exists
+            if stdin_src is not None:
+                with open(stdin_src, "rb") as seed_fh:
+                    subprocess.run(
+                        cmd,
+                        stdin=seed_fh,
+                        capture_output=True,
+                        timeout=timeout,
+                        env=env,
+                    )
+            else:
+                subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    timeout=timeout,
+                    env=env,
+                )
+            # The profile is written on normal AND crash exit; check it exists.
             if Path(profraw).stat().st_size > 0:
                 return profraw
             logger.warning("[Coverage] profraw file is empty")
@@ -262,9 +287,6 @@ class CoverageChecker:
         except Exception as exc:
             logger.debug("[Coverage] coverage run error: %s", exc)
             return None
-        finally:
-            # Don't delete profraw here — caller does it after parsing
-            pass
 
     def _parse_coverage(
         self, cov_binary: str, profraw: str, candidates: set[str]
