@@ -216,7 +216,17 @@ class CoverageChecker:
             cmd.extend(extra_flags)
 
         logger.info("[Coverage] Compiling coverage binary: %s", out_binary)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except FileNotFoundError:
+            logger.error("[Coverage] Compiler not found: %s", compiler)
+            return False
+        except subprocess.TimeoutExpired:
+            logger.error("[Coverage] Coverage compilation timed out after 120s")
+            return False
+        except OSError as exc:
+            logger.error("[Coverage] Coverage compilation OS error: %s", exc)
+            return False
         if result.returncode != 0:
             logger.warning(
                 "[Coverage] Coverage compilation failed:\n%s", result.stderr[:500]
@@ -313,21 +323,41 @@ class CoverageChecker:
         cov_bin   = self._tool("llvm-cov")
 
         # llvm-profdata merge
-        r = subprocess.run(
-            [merge_bin, "merge", "-sparse", profraw, "-o", profdata],
-            capture_output=True, text=True, timeout=30,
-        )
+        try:
+            r = subprocess.run(
+                [merge_bin, "merge", "-sparse", profraw, "-o", profdata],
+                capture_output=True, text=True, timeout=30,
+            )
+        except FileNotFoundError:
+            logger.error("[Coverage] llvm-profdata not found: %s", merge_bin)
+            return set()
+        except subprocess.TimeoutExpired:
+            logger.error("[Coverage] llvm-profdata merge timed out")
+            return set()
+        except OSError as exc:
+            logger.error("[Coverage] llvm-profdata OS error: %s", exc)
+            return set()
         if r.returncode != 0:
             logger.warning("[Coverage] llvm-profdata failed: %s", r.stderr[:200])
             return set()
 
         # llvm-cov export
-        r = subprocess.run(
-            [cov_bin, "export", cov_binary,
-             f"--instr-profile={profdata}",
-             "--format=text"],
-            capture_output=True, text=True, timeout=30,
-        )
+        try:
+            r = subprocess.run(
+                [cov_bin, "export", cov_binary,
+                 f"--instr-profile={profdata}",
+                 "--format=text"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except FileNotFoundError:
+            logger.error("[Coverage] llvm-cov not found: %s", cov_bin)
+            return set()
+        except subprocess.TimeoutExpired:
+            logger.error("[Coverage] llvm-cov export timed out")
+            return set()
+        except OSError as exc:
+            logger.error("[Coverage] llvm-cov export OS error: %s", exc)
+            return set()
         if r.returncode != 0:
             logger.warning("[Coverage] llvm-cov export failed: %s", r.stderr[:200])
             return set()
@@ -392,18 +422,23 @@ class CoverageChecker:
     def _tool(self, base: str) -> str:
         """Return the versioned tool name, e.g. 'llvm-profdata-14'."""
         versioned = f"{base}{self._llvm_suffix}"
-        # prefer versioned if it exists
-        r = subprocess.run(["which", versioned], capture_output=True, text=True)
-        if r.returncode == 0:
-            return versioned
+        try:
+            r = subprocess.run(["which", versioned], capture_output=True, text=True)
+            if r.returncode == 0:
+                return versioned
+        except OSError as exc:
+            logger.debug("[Coverage] 'which %s' failed: %s", versioned, exc)
         return base
 
     def _find_clang(self) -> str | None:
         """Return the best available clang binary."""
         for name in (f"clang{self._llvm_suffix}", "clang"):
-            r = subprocess.run(["which", name], capture_output=True, text=True)
-            if r.returncode == 0:
-                return name
+            try:
+                r = subprocess.run(["which", name], capture_output=True, text=True)
+                if r.returncode == 0:
+                    return name
+            except OSError as exc:
+                logger.debug("[Coverage] 'which %s' failed: %s", name, exc)
         return None
 
     @staticmethod

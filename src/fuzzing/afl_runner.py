@@ -45,21 +45,40 @@ class AFLRunner:
         if cmake.exists():
             build_dir = source_path / "build_afl"
             build_dir.mkdir(exist_ok=True)
-            subprocess.run(
-                ["cmake", "..", f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"],
-                cwd=build_dir, env=env, check=True,
-            )
-            subprocess.run(["make", "-j$(nproc)"], cwd=build_dir, env=env, shell=True, check=True)
+            try:
+                subprocess.run(
+                    ["cmake", "..", f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"],
+                    cwd=build_dir, env=env, check=True,
+                )
+            except FileNotFoundError:
+                raise RuntimeError("cmake not found in PATH") from None
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(f"cmake configure failed (rc={exc.returncode})") from exc
+            except OSError as exc:
+                raise RuntimeError(f"cmake OS error: {exc}") from exc
+            try:
+                subprocess.run(["make", "-j$(nproc)"], cwd=build_dir, env=env, shell=True, check=True)
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(f"make (cmake build) failed (rc={exc.returncode})") from exc
+            except OSError as exc:
+                raise RuntimeError(f"make (cmake build) OS error: {exc}") from exc
             # Find the built binary
             for f in build_dir.rglob(binary_path.stem):
                 if f.is_file() and os.access(f, os.X_OK):
                     shutil.copy2(f, instrumented_path)
                     break
         elif makefile.exists():
-            subprocess.run(
-                ["make", f"CC={cc}", f"CXX={cxx}", "-j$(nproc)"],
-                cwd=source_path, env=env, shell=True, check=True,
-            )
+            try:
+                subprocess.run(
+                    ["make", f"CC={cc}", f"CXX={cxx}", "-j$(nproc)"],
+                    cwd=source_path, env=env, shell=True, check=True,
+                )
+            except FileNotFoundError:
+                raise RuntimeError("make not found in PATH") from None
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(f"make failed (rc={exc.returncode})") from exc
+            except OSError as exc:
+                raise RuntimeError(f"make OS error: {exc}") from exc
             built = source_path / binary_path.name
             if built.exists():
                 shutil.copy2(built, instrumented_path)
@@ -76,7 +95,14 @@ class AFLRunner:
             cmd.extend(str(f) for f in source_files)
 
             logger.info("Compiling: %s", " ".join(cmd))
-            subprocess.run(cmd, env=env, check=True)
+            try:
+                subprocess.run(cmd, env=env, check=True)
+            except FileNotFoundError:
+                raise RuntimeError(f"Compiler not found: {compiler}") from None
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(f"Compilation failed (rc={exc.returncode})") from exc
+            except OSError as exc:
+                raise RuntimeError(f"Compilation OS error: {exc}") from exc
 
         os.chmod(instrumented_path, 0o755)
         logger.info("Instrumented binary: %s", instrumented_path)
@@ -141,12 +167,19 @@ class AFLRunner:
         self._afl_log = open(log_path, "w")
         logger.info("AFL++ output → %s", log_path)
         logger.info("Starting AFL++: %s", " ".join(cmd))
-        self._process = subprocess.Popen(
-            cmd,
-            stdout=self._afl_log,
-            stderr=subprocess.STDOUT,
-            env=env,
-        )
+        try:
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=self._afl_log,
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
+        except FileNotFoundError:
+            self._afl_log.close()
+            raise RuntimeError("afl-fuzz not found in PATH") from None
+        except OSError as exc:
+            self._afl_log.close()
+            raise RuntimeError(f"Failed to start afl-fuzz: {exc}") from exc
         logger.info("AFL++ started with PID %d", self._process.pid)
 
     def stop(self):
