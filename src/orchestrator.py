@@ -112,7 +112,7 @@ class Orchestrator:
                 fcc = cached_fcc
                 logger.info(
                     "[Pre-phase FCC] Restored FCC from persistent memory (%d hops): %s",
-                    len(fcc) - 1,
+                    max(len(fcc) - 1, 0),
                     " -> ".join(fcc),
                 )
             else:
