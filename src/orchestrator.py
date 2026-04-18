@@ -151,18 +151,26 @@ class Orchestrator:
         # Build the LLVM source-coverage binary used by CoverageChecker to
         # determine which functions a seed reaches at runtime (RANDLUZZ §3.3.2).
         # This is separate from the AFL++ fuzzing binary.
-        binary = self.config["target"].get("binary", "")
-        logger.info("[Pre-phase Coverage] Building coverage-instrumented binary...")
-        cov_ok = self.coverage_checker.build(
-            source_dir=source_dir,
-            reference_binary=binary,
-        )
-        if cov_ok:
-            logger.info("[Pre-phase Coverage] Coverage binary ready")
+        cov_ok = False
+        if fcc is not None and len(fcc) >= 2:
+            binary = self.config["target"].get("binary", "")
+            logger.info("[Pre-phase Coverage] Building coverage-instrumented binary...")
+            cov_ok = self.coverage_checker.build(
+                source_dir=source_dir,
+                reference_binary=binary,
+            )
+            if cov_ok:
+                logger.info("[Pre-phase Coverage] Coverage binary ready")
+            else:
+                logger.warning(
+                    "[Pre-phase Coverage] Coverage binary build failed — "
+                    "seed reasoning will use conservative fallback (entry only)"
+                )
         else:
-            logger.warning(
-                "[Pre-phase Coverage] Coverage binary build failed — "
-                "seed reasoning will use conservative fallback (entry only)"
+            logger.info(
+                "[Pre-phase Coverage] Skipping coverage binary build because "
+                "no non-trivial FCC is available; seed reasoning will use "
+                "functionality-based fallback"
             )
 
         def _configured_corpus_dir():
