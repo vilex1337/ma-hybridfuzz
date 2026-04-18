@@ -60,8 +60,22 @@ class CallChainExtractor:
     DEFAULT_ENTRY_POINTS = ["main", "LLVMFuzzerTestOneInput"]
 
     def __init__(self, config: dict):
+        global _CLANG_AVAILABLE
+
         self.config = config
-        self._index: Any = cindex.Index.create() if _CLANG_AVAILABLE else None
+        if not _CLANG_AVAILABLE:
+            self._index = None
+        else:
+            try:
+                self._index = cindex.Index.create()
+            except Exception as exc:
+                logger.warning(
+                    "libclang could not be initialized (%s). "
+                    "Call chain extraction will be skipped.",
+                    exc,
+                )
+                _CLANG_AVAILABLE = False
+                self._index = None
 
     # ------------------------------------------------------------------
     # Public API
