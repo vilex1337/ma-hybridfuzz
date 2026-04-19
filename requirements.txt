@@ -7,3 +7,4 @@ google-genai>=0.3.0
 pyyaml>=6.0
 numpy>=1.24.0
 networkx>=3.0
+libclang>=16.0.0

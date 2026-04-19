@@ -39,23 +39,28 @@ logger = logging.getLogger("pre_phase.memory")
 
 # File names inside the memory directory
 _PRE_PHASE_PREFIX = "pre_phase_"       # per-target files: pre_phase_<key>.json
+_FCC_PREFIX = "fcc_"                   # per-target files: fcc_<key>.json
 _REASSESSMENT_FILE = "reassessment_history.json"
 _COVERAGE_FILE = "coverage_snapshots.json"
 _META_FILE = "memory_meta.json"
 
 
-def _pre_phase_filename(target_function: str, bug_type: str) -> str:
-    """
-    Return a safe, unique filename for a (target_function, bug_type) pair.
-
-    Non-alphanumeric characters are replaced with underscores so the name
-    is valid on all file systems.  The double-underscore separator makes the
-    two components visually distinct without colliding.
-    """
+def _target_key(target_function: str, bug_type: str) -> str:
+    """Return a safe filesystem key for a (target_function, bug_type) pair."""
     def sanitize(s: str) -> str:
         return "".join(c if c.isalnum() or c == "_" else "_" for c in s)
 
-    return f"{_PRE_PHASE_PREFIX}{sanitize(target_function)}__{sanitize(bug_type)}.json"
+    return f"{sanitize(target_function)}__{sanitize(bug_type)}"
+
+
+def _pre_phase_filename(target_function: str, bug_type: str) -> str:
+    """Return a safe, unique filename for the pre-phase LLM context."""
+    return f"{_PRE_PHASE_PREFIX}{_target_key(target_function, bug_type)}.json"
+
+
+def _fcc_filename(target_function: str, bug_type: str) -> str:
+    """Return a safe, unique filename for the FCC cache."""
+    return f"{_FCC_PREFIX}{_target_key(target_function, bug_type)}.json"
 
 
 class PersistentMemory:
@@ -124,13 +129,23 @@ class PersistentMemory:
             logger.warning("[Memory] Could not load pre-phase cache: %s", e)
             return None
 
+        if not isinstance(payload, dict):
+            logger.warning("[Memory] Malformed pre-phase cache (expected dict), ignoring.")
+            return None
+        ctx = payload.get("ctx")
+        if not isinstance(ctx, dict):
+            logger.warning(
+                "[Memory] Malformed pre-phase cache (missing or invalid 'ctx' field), ignoring."
+            )
+            return None
+
         age_h = (time.time() - payload.get("saved_at", 0)) / 3600
         logger.info(
             "[Memory] Loaded pre-phase context (target=%s, age=%.1fh) — skipping LLM pre-phase.",
             target_function,
             age_h,
         )
-        return payload["ctx"]
+        return ctx
 
     def invalidate_pre_phase_ctx(self, target_function: str, bug_type: str) -> None:
         """Delete the per-target pre-phase cache (e.g. when config changes)."""
@@ -138,6 +153,79 @@ class PersistentMemory:
         if path.exists():
             path.unlink()
             logger.info("[Memory] Pre-phase context cache invalidated: %s", path.name)
+
+    # -------------------------------------------------------------------------
+    # 1b. Function Call Chain cache
+    # -------------------------------------------------------------------------
+
+    def save_fcc(
+        self, target_function: str, bug_type: str, fcc: list[str]
+    ) -> None:
+        """
+        Persist the extracted Function Call Chain to disk.
+
+        The FCC is derived from the Clang AST (static analysis, no LLM call)
+        and is stored separately from the pre-phase LLM context so it can be
+        loaded before any LLM interaction on subsequent runs.
+        """
+        payload = {
+            "target_function": target_function,
+            "bug_type": bug_type,
+            "saved_at": time.time(),
+            "fcc": fcc,
+        }
+        path = self._dir / _fcc_filename(target_function, bug_type)
+        path.write_text(json.dumps(payload, indent=2))
+        logger.info(
+            "[Memory] FCC saved (%d hops: %s) → %s",
+            len(fcc) - 1 if len(fcc) > 1 else 0,
+            " -> ".join(fcc),
+            path.name,
+        )
+
+    def load_fcc(
+        self, target_function: str, bug_type: str
+    ) -> Optional[list[str]]:
+        """
+        Load a previously saved Function Call Chain for this target.
+
+        Returns None when no cache exists, signalling the orchestrator to
+        run Clang AST extraction (or fall back to config / functionality-mode).
+        """
+        path = self._dir / _fcc_filename(target_function, bug_type)
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("[Memory] Could not load FCC cache: %s", e)
+            return None
+
+        if not isinstance(payload, dict):
+            logger.warning("[Memory] Malformed FCC cache (expected dict), ignoring.")
+            return None
+        fcc: Any = payload.get("fcc", [])
+        if not isinstance(fcc, list) or not all(isinstance(f, str) for f in fcc):
+            logger.warning(
+                "[Memory] Malformed FCC cache (expected list of strings), ignoring."
+            )
+            return None
+
+        age_h = (time.time() - payload.get("saved_at", 0)) / 3600
+        logger.info(
+            "[Memory] Loaded cached FCC for '%s' (age=%.1fh): %s",
+            target_function,
+            age_h,
+            " -> ".join(fcc),
+        )
+        return fcc
+
+    def invalidate_fcc(self, target_function: str, bug_type: str) -> None:
+        """Delete the FCC cache for this target (e.g. after source changes)."""
+        path = self._dir / _fcc_filename(target_function, bug_type)
+        if path.exists():
+            path.unlink()
+            logger.info("[Memory] FCC cache invalidated: %s", path.name)
 
     # -------------------------------------------------------------------------
     # 2. Reassessment history
@@ -199,6 +287,8 @@ class PersistentMemory:
             logger.warning("[Memory] Corrupt data in %s, resetting.", _REASSESSMENT_FILE)
             return
         for entry in history:
+            if not isinstance(entry, dict):
+                continue
             if entry.get("id") == count:
                 before = entry.get("coverage_before", 0) or 0
                 entry["coverage_after"] = coverage_after
@@ -283,7 +373,10 @@ class PersistentMemory:
             return None
         if not snapshots:
             return None
-        closest = min(snapshots, key=lambda s: abs(s.get("timestamp", 0) - timestamp))
+        valid = [s for s in snapshots if isinstance(s, dict)]
+        if not valid:
+            return None
+        closest = min(valid, key=lambda s: abs(s.get("timestamp", 0) - timestamp))
         return closest.get("paths_total")
 
     # -------------------------------------------------------------------------
@@ -297,13 +390,19 @@ class PersistentMemory:
         if not isinstance(snapshots, list):
             snapshots = []
         pre_phase_files = list(self._dir.glob(f"{_PRE_PHASE_PREFIX}*.json"))
+        fcc_files = list(self._dir.glob(f"{_FCC_PREFIX}*.json"))
         return {
             "memory_dir": str(self._dir),
             "pre_phase_cached": len(pre_phase_files),
+            "fcc_cached": len(fcc_files),
             "reassessment_count": len(history),
             "failed_strategies": len(self.get_failed_strategies()),
             "coverage_snapshots": len(snapshots),
-            "latest_coverage": snapshots[-1].get("paths_total") if snapshots else None,
+            "latest_coverage": (
+                snapshots[-1].get("paths_total")
+                if snapshots and isinstance(snapshots[-1], dict)
+                else None
+            ),
         }
 
     def _ensure_meta(self) -> None:
@@ -312,7 +411,13 @@ class PersistentMemory:
         meta = {
             "description": "MA-HybridFuzz persistent memory store",
             "files": {
-                f"{_PRE_PHASE_PREFIX}<target>__<bug_type>.json": "Per-target pre-phase LLM context (bug_info, target_summary, program_usage)",
+                f"{_PRE_PHASE_PREFIX}<target>__<bug_type>.json": (
+                    "Per-target pre-phase LLM context (bug_info, target_summary, program_usage)"
+                ),
+                f"{_FCC_PREFIX}<target>__<bug_type>.json": (
+                    "Per-target Function Call Chain extracted from Clang AST "
+                    "(entry → ... → target_function)"
+                ),
                 _REASSESSMENT_FILE: "History of on-demand reassessment events with confidence deltas",
                 _COVERAGE_FILE: "Periodic AFL++ coverage snapshots for trend analysis",
             },

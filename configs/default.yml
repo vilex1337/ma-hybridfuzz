@@ -5,6 +5,8 @@ target:
   source_dir: ""       # Path to target source code
   target_function: ""  # Target function name to reach
   bug_type: ""         # e.g., buffer_overflow, use_after_free, integer_overflow
+  args: ["@@"]         # CLI args for the binary; "@@" is replaced with the seed
+                       # file path (AFL++ convention). Use [] to feed via stdin.
 
 llm:
   # Provider: anthropic | openai | gemini
