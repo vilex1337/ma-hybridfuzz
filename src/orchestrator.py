@@ -59,6 +59,7 @@ class Orchestrator:
 
         # Pre-phase context preserved for reassessment (avoids re-querying LLM)
         self._pre_phase_ctx: dict = {}
+        self._instrumented_binary: str | None = None
 
         self._running = True
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -164,6 +165,22 @@ class Orchestrator:
                 "[Pre-phase Coverage] Coverage binary build failed — "
                 "seed reasoning will use conservative fallback (entry only)"
             )
+
+        # ── AFL++ Instrumentation ─────────────────────────────────────────────
+        # Build the AFL++-instrumented binary here so it is ready when the
+        # fuzzing loop starts.  Doing it in pre-phase keeps _run_fuzzing_loop
+        # free of slow compilation and makes both binary builds visible together.
+        logger.info("[Pre-phase AFL++] Instrumenting target binary...")
+        try:
+            self._instrumented_binary = self.afl.instrument(
+                binary=self.config["target"]["binary"],
+                source_dir=self.config["target"]["source_dir"],
+                use_asan=self.config["fuzzer"]["use_asan"],
+            )
+            logger.info("[Pre-phase AFL++] Instrumented binary ready: %s", self._instrumented_binary)
+        except RuntimeError as exc:
+            logger.error("[Pre-phase AFL++] Instrumentation failed: %s", exc)
+            raise
 
         def _configured_corpus_dir():
             candidate_paths = []
@@ -677,13 +694,9 @@ class Orchestrator:
         return {"declaration": "", "body": "", "key_lines": []}
 
     def _run_fuzzing_loop(self):
-        # Instrument target binary
-        logger.info("[Fuzzing] Instrumenting target binary...")
-        instrumented = self.afl.instrument(
-            binary=self.config["target"]["binary"],
-            source_dir=self.config["target"]["source_dir"],
-            use_asan=self.config["fuzzer"]["use_asan"],
-        )
+        if self._instrumented_binary is None:
+            raise RuntimeError("Instrumented binary not built — pre-phase must run first")
+        instrumented = self._instrumented_binary
 
         # Load pre-computed data
         distance_matrix = self.attention.load_cached()

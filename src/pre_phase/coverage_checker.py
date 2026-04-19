@@ -100,7 +100,8 @@ class CoverageChecker:
             else reference_binary_path
         )
         out_binary = str(out_binary_base) + "_covbuild"
-        success = self._compile_coverage_binary(source_dir, out_binary)
+        binary_name = reference_binary_path.stem
+        success = self._compile_coverage_binary(source_dir, out_binary, binary_name)
         if success:
             self._cov_binary = out_binary
         return success
@@ -173,68 +174,27 @@ class CoverageChecker:
     # Coverage binary compilation
     # ------------------------------------------------------------------
 
-    def _compile_coverage_binary(self, source_dir: str, out_binary: str) -> bool:
-        """
-        Compile all C/C++ sources under *source_dir* into a single
-        LLVM source-coverage-instrumented binary at *out_binary*.
+    def _compile_coverage_binary(self, source_dir: str, out_binary: str, binary_name: str) -> bool:
+        from pre_phase.binary_builder import build_binary
 
-        Uses the same compiler flags extracted from compile_commands.json if
-        available, otherwise applies sensible defaults.
-        """
-        source_path = Path(source_dir)
-        if not source_path.exists():
-            logger.error("[Coverage] source_dir not found: %s", source_dir)
-            return False
-
-        # Gather source files
-        sources: list[str] = []
-        for ext in ("*.c", "*.cpp", "*.cc", "*.cxx"):
-            sources.extend(str(p) for p in source_path.rglob(ext))
-        if not sources:
-            logger.error("[Coverage] No C/C++ sources found in %s", source_dir)
-            return False
-
-        # Pick compiler
-        compiler = self._find_clang()
-        if compiler is None:
+        cc = self._find_clang()
+        if cc is None:
             logger.error("[Coverage] clang not found in PATH")
             return False
 
-        cmd = [
-            compiler,
+        # Derive clang++ from clang (e.g. clang-14 → clang++-14)
+        cxx = cc.replace("clang", "clang++", 1)
+
+        extra_cflags = [
             "-fprofile-instr-generate",
             "-fcoverage-mapping",
             "-g",
             "-O0",
-            "-o", out_binary,
-            *sources,
+            *self.config.get("target", {}).get("coverage_compile_flags", []),
         ]
 
-        # Append extra CFLAGS / LDFLAGS from config
-        extra_flags = self.config.get("target", {}).get("coverage_compile_flags", [])
-        if extra_flags:
-            cmd.extend(extra_flags)
-
         logger.info("[Coverage] Compiling coverage binary: %s", out_binary)
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        except FileNotFoundError:
-            logger.error("[Coverage] Compiler not found: %s", compiler)
-            return False
-        except subprocess.TimeoutExpired:
-            logger.error("[Coverage] Coverage compilation timed out after 120s")
-            return False
-        except OSError as exc:
-            logger.error("[Coverage] Coverage compilation OS error: %s", exc)
-            return False
-        if result.returncode != 0:
-            logger.warning(
-                "[Coverage] Coverage compilation failed:\n%s", result.stderr[:500]
-            )
-            return False
-
-        logger.info("[Coverage] Coverage binary built: %s", out_binary)
-        return True
+        return build_binary(source_dir, out_binary, cc, cxx, binary_name, extra_cflags=extra_cflags)
 
     # ------------------------------------------------------------------
     # Profile execution + parsing
