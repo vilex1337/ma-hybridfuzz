@@ -66,6 +66,8 @@ SUPPORTED_MODELS: dict[str, set[str]] = {
         "gemini-1.5-pro",
         "gemini-1.5-flash",
     },
+    # Any model ID is accepted for self-hosted; the set is intentionally empty.
+    "self_hosted": set(),
 }
 
 
@@ -88,7 +90,8 @@ def create_provider(config: dict) -> LLMProvider:
             f"Expected one of: {sorted(SUPPORTED_MODELS)}"
         )
 
-    if model not in SUPPORTED_MODELS[provider_name]:
+    known = SUPPORTED_MODELS[provider_name]
+    if known and model not in known:
         logger.warning(
             "Model '%s' is not in the known list for provider '%s'. Proceeding anyway.",
             model, provider_name,
@@ -103,5 +106,11 @@ def create_provider(config: dict) -> LLMProvider:
     if provider_name == "gemini":
         from llm.gemini_provider import GeminiProvider
         return GeminiProvider(model=model)
+    if provider_name == "self_hosted":
+        import os
+        from llm.self_hosted_provider import SelfHostedProvider
+        base_url = llm_config.get("base_url") or os.getenv("SELF_HOSTED_BASE_URL", "")
+        use_chat = llm_config.get("use_chat", True)
+        return SelfHostedProvider(model=model, base_url=base_url, use_chat=use_chat)
 
     raise ValueError(f"Unhandled provider: {provider_name}")
