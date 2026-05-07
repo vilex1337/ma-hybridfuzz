@@ -12,8 +12,7 @@ command -v docker-compose >/dev/null 2>&1 || command -v docker compose >/dev/nul
 
 # Create workspace directories
 echo "[1/3] Creating workspace directories..."
-mkdir -p workspace/{corpus,crashes,mutators,distance_cache,coverage,logs}
-mkdir -p workspace/instrumented
+mkdir -p workspace/{corpus,crashes,mutators,distance_cache,coverage,logs,memory,instrumented}
 
 # Check for API key
 if [ -z "$ANTHROPIC_API_KEY" ]; then

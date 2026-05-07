@@ -1,0 +1,59 @@
+# MA-HybridFuzz — jsoncpp_jsoncpp_fuzzer target
+# Mirrors the FuzzBench benchmark: benchmarks/jsoncpp_jsoncpp_fuzzer
+
+attention:
+  enabled: false   # temporarily disabled; re-enable once LLM inference is stable
+
+target:
+  # binary stem must match the executable name produced by targets/jsoncpp/Makefile.
+  binary: "/targets/jsoncpp_fuzz/jsoncpp_fuzzer"
+  source_dir: "/targets/jsoncpp"
+  build_dir: "/targets/jsoncpp_fuzz"
+  target_function: "readValue"   # core recursive-descent parser; plain identifier reachable by BFS
+  fcc: ["LLVMFuzzerTestOneInput", "parse", "readValue"]  # explicit chain; bypasses Clang AST extraction
+  bug_type: "heap_buffer_overflow"
+  args: ["@@"]   # AFL++ replaces @@ with the seed file path; libAFLDriver reads it
+  program_usage: |
+    jsoncpp is a C++ library for parsing and generating JSON. The fuzzer target
+    exercises Json::CharReaderBuilder with 11 configurable parser settings (encoded
+    in the first 4 bytes of input) followed by the raw JSON bytes to parse.
+    Interesting inputs: deeply nested structures, very long strings, duplicate keys,
+    special floats (Infinity, NaN), trailing commas, single-quoted strings, UTF-8
+    sequences, and malformed/truncated JSON.
+
+llm:
+  provider: "self_hosted"
+  model: "qwen2.5-coder-14b"
+  base_url: "https://0134-34-122-12-113.ngrok-free.app"
+  use_chat: true
+  max_tokens: 4096
+  temperature: 0.3
+  timeout: 600
+
+fuzzer:
+  engine: "afl++"
+  timeout: 3600
+  exec_timeout: 1000
+  memory_limit: 256
+  seed_count : 20
+  use_asan: true
+  use_ubsan: true
+  use_custom_mutator: false   # temporarily disabled
+
+scheduler:
+  attention_weight: 0.6
+  coverage_weight: 0.3
+  speed_weight: 0.1
+
+reassessment:
+  plateau_threshold: 300
+  max_reassessments: 5
+
+paths:
+  corpus: "/workspace/corpus"
+  crashes: "/workspace/crashes"
+  mutators: "/workspace/mutators"
+  distance_cache: "/workspace/distance_cache"
+  coverage: "/workspace/coverage"
+  logs: "/workspace/logs"
+  memory: "/workspace/memory"

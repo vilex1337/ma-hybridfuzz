@@ -144,18 +144,22 @@ class Orchestrator:
 
         # ── SA: Static Analysis ───────────────────────────────────────────────
         # Compute attention distance matrix (uses Clang-AST-derived call graph)
-        logger.info("[Pre-phase SA] Computing attention distance matrix...")
-        self.attention.compute(source_dir=source_dir, target_function=target_function)
-        logger.info("[Pre-phase SA] Attention distance matrix cached")
+        if self.config.get("attention", {}).get("enabled", True):
+            logger.info("[Pre-phase SA] Computing attention distance matrix...")
+            self.attention.compute(source_dir=source_dir, target_function=target_function)
+            logger.info("[Pre-phase SA] Attention distance matrix cached")
+        else:
+            logger.info("[Pre-phase SA] Attention computer disabled — skipping distance matrix")
 
         # ── Coverage Binary ───────────────────────────────────────────────────
         # Build the LLVM source-coverage binary used by CoverageChecker to
         # determine which functions a seed reaches at runtime (RANDLUZZ §3.3.2).
         # This is separate from the AFL++ fuzzing binary.
         binary = self.config["target"].get("binary", "")
+        build_dir = self.config["target"].get("build_dir", source_dir)
         logger.info("[Pre-phase Coverage] Building coverage-instrumented binary...")
         cov_ok = self.coverage_checker.build(
-            source_dir=source_dir,
+            source_dir=build_dir,
             reference_binary=binary,
         )
         if cov_ok:
@@ -174,7 +178,7 @@ class Orchestrator:
         try:
             self._instrumented_binary = self.afl.instrument(
                 binary=self.config["target"]["binary"],
-                source_dir=self.config["target"]["source_dir"],
+                source_dir=self.config["target"].get("build_dir", self.config["target"]["source_dir"]),
                 use_asan=self.config["fuzzer"]["use_asan"],
             )
             logger.info("[Pre-phase AFL++] Instrumented binary ready: %s", self._instrumented_binary)
@@ -230,8 +234,12 @@ class Orchestrator:
             )
 
         # ── Bug Information ───────────────────────────────────────────────────
-        logger.info("[Pre-phase] Extracting bug information from report...")
-        bug_info = self.reasoning.extract_bug_info(bug_report) if bug_report else {}
+        if cached_ctx and cached_ctx.get("bug_info"):
+            bug_info = cached_ctx["bug_info"]
+            logger.info("[Pre-phase] Bug info restored from cache (skipping LLM call).")
+        else:
+            logger.info("[Pre-phase] Extracting bug information from report...")
+            bug_info = self.reasoning.extract_bug_info(bug_report) if bug_report else {}
         logger.info(
             "[Pre-phase] Bug info: function=%s type=%s",
             bug_info.get("function", target_function),
@@ -239,18 +247,24 @@ class Orchestrator:
         )
 
         # ── Function Summary ──────────────────────────────────────────────────
-        # Generate a summary for the target function (and FCC functions if available)
-        logger.info("[Pre-phase] Generating function summary for '%s'...", target_function)
-        target_src = self._load_function_source(source_dir, target_function)
-        target_summary = self.reasoning.summarize_function(
-            func_name=target_function,
-            func_declaration=target_src.get("declaration", ""),
-            func_body=target_src.get("body", ""),
-        )
-        logger.info(
-            "[Pre-phase] Function summary generated: %s...",
-            target_summary.get("functionality", "")[:80],
-        )
+        if cached_ctx and cached_ctx.get("target_summary"):
+            target_summary = cached_ctx["target_summary"]
+            logger.info(
+                "[Pre-phase] Function summary restored from cache: %s...",
+                target_summary.get("functionality", "")[:80],
+            )
+        else:
+            logger.info("[Pre-phase] Generating function summary for '%s'...", target_function)
+            target_src = self._load_function_source(source_dir, target_function)
+            target_summary = self.reasoning.summarize_function(
+                func_name=target_function,
+                func_declaration=target_src.get("declaration", ""),
+                func_body=target_src.get("body", ""),
+            )
+            logger.info(
+                "[Pre-phase] Function summary generated: %s...",
+                target_summary.get("functionality", "")[:80],
+            )
 
         # Summarize FCC intermediate functions if provided
         fcc_summaries: dict[str, dict] = {target_function: target_summary}
@@ -265,48 +279,56 @@ class Orchestrator:
             )
 
         # ── Reachable Seed Generation ─────────────────────────────────────────
-        # Step 1: Preliminary seed from Program Usage + Function Summary
-        logger.info("[Pre-phase Opt] Generating preliminary seed...")
-        prelim = self.reasoning.generate_preliminary_seed(
-            target_function=target_function,
-            func_summary=target_summary,
-            program_usage=program_usage,
-        )
-        logger.info(
-            "[Pre-phase Opt] Preliminary seed: format=%s command=%s",
-            prelim.get("input_format", "?"),
-            prelim.get("command", "?"),
-        )
+        input_format = cached_ctx.get("input_format", "unknown") if cached_ctx else "unknown"
+        if _corpus_has_seed():
+            logger.info("[Pre-phase Opt] Corpus already has seeds — skipping seed generation.")
+        else:
+            # Step 1: Preliminary seed from Program Usage + Function Summary
+            logger.info("[Pre-phase Opt] Generating preliminary seed...")
+            prelim = self.reasoning.generate_preliminary_seed(
+                target_function=target_function,
+                func_summary=target_summary,
+                program_usage=program_usage,
+            )
+            input_format = prelim.get("input_format", "unknown")
+            logger.info(
+                "[Pre-phase Opt] Preliminary seed: format=%s command=%s",
+                input_format,
+                prelim.get("command", "?"),
+            )
 
-        # Step 2a: Reasoning along FCC (if complete FCC is available)
-        # Step 2b: Reasoning based on Functionality (fallback for incomplete FCC)
-        reachable_seeds = self._generate_reachable_seeds(
-            preliminary_seed=prelim,
-            fcc=fcc,
-            fcc_summaries=fcc_summaries,
-            target_function=target_function,
-            target_summary=target_summary,
-            source_dir=source_dir,
-            program_usage=program_usage,
-        )
+            # Step 2a: Reasoning along FCC (if complete FCC is available)
+            # Step 2b: Reasoning based on Functionality (fallback for incomplete FCC)
+            reachable_seeds = self._generate_reachable_seeds(
+                preliminary_seed=prelim,
+                fcc=fcc,
+                fcc_summaries=fcc_summaries,
+                target_function=target_function,
+                target_summary=target_summary,
+                source_dir=source_dir,
+                program_usage=program_usage,
+            )
 
-        # Materialise all generated seeds to the corpus directory
-        logger.info("[Pre-phase Opt] Writing %d reachable seeds to corpus...", len(reachable_seeds))
-        written = self.seed_gen.write_seeds(reachable_seeds)
-        logger.info("[Pre-phase Opt] Wrote %d seeds", len(written))
+            # Materialise all generated seeds to the corpus directory
+            logger.info("[Pre-phase Opt] Writing %d reachable seeds to corpus...", len(reachable_seeds))
+            written = self.seed_gen.write_seeds(reachable_seeds)
+            logger.info("[Pre-phase Opt] Wrote %d seeds", len(written))
 
         # ── Bug-Specific Mutators ─────────────────────────────────────────────
-        logger.info("[Pre-phase Mutator] Generating bug-specific mutators...")
-        mutators = self.mutator_gen.generate(
-            analysis={
-                "bug_info": bug_info,
-                "function_summary": target_summary,
-                "vulnerability_pattern": bug_info.get("cause", ""),
-                "trigger_conditions": bug_info.get("trigger_conditions", []),
-            },
-            bug_type=bug_info.get("vulnerability_type", self.config["target"]["bug_type"]),
-        )
-        logger.info("[Pre-phase Mutator] Generated %d custom mutators", len(mutators))
+        if not self.config["fuzzer"].get("use_custom_mutator", True):
+            logger.info("[Pre-phase Mutator] use_custom_mutator=false — skipping mutator generation.")
+        else:
+            logger.info("[Pre-phase Mutator] Generating bug-specific mutators...")
+            mutators = self.mutator_gen.generate(
+                analysis={
+                    "bug_info": bug_info,
+                    "function_summary": target_summary,
+                    "vulnerability_pattern": bug_info.get("cause", ""),
+                    "trigger_conditions": bug_info.get("trigger_conditions", []),
+                },
+                bug_type=bug_info.get("vulnerability_type", self.config["target"]["bug_type"]),
+            )
+            logger.info("[Pre-phase Mutator] Generated %d custom mutators", len(mutators))
 
         # ── Persist context for Phase 3 reassessment ──────────────────────────
         # Store everything the reassessment agent needs so we never re-query the
@@ -316,7 +338,7 @@ class Orchestrator:
             "target_summary": target_summary,
             "program_usage": program_usage,
             "target_function": target_function,
-            "input_format": prelim.get("input_format", "unknown"),
+            "input_format": input_format,
         }
         # Write to disk so a restarted orchestrator can skip the LLM pre-phase.
         self.memory.save_pre_phase_ctx(target_function, bug_type, self._pre_phase_ctx)
@@ -721,7 +743,6 @@ class Orchestrator:
         last_new_coverage_time = time.time()
         last_coverage_count = 0
         start_time = time.time()
-
         while self._running and (time.time() - start_time) < timeout:
             time.sleep(10)
             stats = self.afl.get_stats()
@@ -770,6 +791,28 @@ class Orchestrator:
                 last_new_coverage_time = time.time()
 
         self.afl.stop()
+        self._fetch_inference_metrics()
+
+    def _fetch_inference_metrics(self):
+        """Call GET /metrics on the self-hosted inference server and log the result."""
+        llm_cfg = self.config.get("llm", {})
+        if llm_cfg.get("provider", "").lower() != "self_hosted":
+            return
+        import os
+        import requests as _req
+        base_url = (llm_cfg.get("base_url") or os.getenv("SELF_HOSTED_BASE_URL", "")).rstrip("/")
+        if not base_url:
+            return
+        try:
+            resp = _req.get(f"{base_url}/metrics", timeout=10)
+            resp.raise_for_status()
+            m = resp.json()
+            logger.info("=== Inference Metrics ===")
+            logger.info("Requests made:       %s", m.get("requests", "N/A"))
+            logger.info("Input tokens total:  %s", m.get("input_tokens", "N/A"))
+            logger.info("Output tokens total: %s", m.get("output_tokens", "N/A"))
+        except Exception as exc:
+            logger.warning("Could not fetch inference metrics: %s", exc)
 
     def _run_reassessment(self, afl_stats: dict, reassessment_count: int, plateau_s: int = 0):
         """

@@ -10,6 +10,7 @@ subclasses work unchanged across Anthropic, OpenAI (Codex), and Gemini.
 
 import json
 import logging
+import time
 from typing import Any
 
 from llm.provider import create_provider
@@ -65,13 +66,31 @@ class LLMAgent:
             parts.append(f"### Answer Template\n{answer_template}")
         return "\n\n".join(parts)
 
-    def _query_llm(self, prompt: str, temperature: float | None = None) -> str:
-        """Send a single stateless query to the LLM and return the raw text."""
-        return self.provider.generate(
-            prompt=prompt,
-            max_tokens=self.max_tokens,
-            temperature=self.default_temperature if temperature is None else temperature,
-        )
+    def _query_llm(self, prompt: str, temperature: float | None = None, retries: int = 3) -> str:
+        """Send a single stateless query to the LLM and return the raw text.
+
+        Retries up to *retries* times on transient errors (5xx, timeout, connection
+        reset) with exponential backoff (5s, 25s, 125s).
+        """
+        t = self.default_temperature if temperature is None else temperature
+        delay = 5
+        for attempt in range(1, retries + 1):
+            try:
+                return self.provider.generate(
+                    prompt=prompt,
+                    max_tokens=self.max_tokens,
+                    temperature=t,
+                )
+            except Exception as exc:
+                # Only retry on transient conditions; surface permanent errors immediately.
+                msg = str(exc)
+                transient = any(k in msg for k in ("503", "502", "429", "timed out", "ReadTimeout", "ConnectionError", "RemoteDisconnected"))
+                if not transient or attempt == retries:
+                    raise
+                logger.warning("[LLM] Transient error (attempt %d/%d): %s — retrying in %ds", attempt, retries, exc, delay)
+                time.sleep(delay)
+                delay *= 5
+        raise RuntimeError("unreachable")
 
     def _parse_json(self, text: str) -> dict[str, Any]:
         """Parse JSON from LLM text, asserting the result is a dict.

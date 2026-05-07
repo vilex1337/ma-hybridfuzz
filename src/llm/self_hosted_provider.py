@@ -23,13 +23,13 @@ from llm.provider import LLMProvider
 
 logger = logging.getLogger("llm.self_hosted")
 
-_DEFAULT_TIMEOUT = 120  # seconds
+_DEFAULT_TIMEOUT = 600  # seconds
 
 
 class SelfHostedProvider(LLMProvider):
     """Calls the FastAPI inference server defined in inference/*.ipynb."""
 
-    def __init__(self, model: str, base_url: str, use_chat: bool = True):
+    def __init__(self, model: str, base_url: str, use_chat: bool = True, timeout: int = _DEFAULT_TIMEOUT):
         if not base_url:
             raise RuntimeError(
                 "Self-hosted provider requires a base_url. "
@@ -38,6 +38,7 @@ class SelfHostedProvider(LLMProvider):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.use_chat = use_chat
+        self.timeout = timeout
 
     def generate(
         self,
@@ -59,7 +60,7 @@ class SelfHostedProvider(LLMProvider):
         resp = requests.post(
             f"{self.base_url}/chat",
             json=payload,
-            timeout=_DEFAULT_TIMEOUT,
+            timeout=self.timeout,
         )
         resp.raise_for_status()
         return resp.json().get("content", "")
@@ -74,7 +75,7 @@ class SelfHostedProvider(LLMProvider):
         resp = requests.post(
             f"{self.base_url}/generate",
             json=payload,
-            timeout=_DEFAULT_TIMEOUT,
+            timeout=self.timeout,
         )
         resp.raise_for_status()
         return resp.json().get("generated_text", "")

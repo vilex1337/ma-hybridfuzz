@@ -67,22 +67,38 @@ class AFLRunner:
         env.setdefault("ASAN_OPTIONS", "abort_on_error=1:symbolize=0:detect_leaks=0")
 
         # Build AFL++ command
+        # ASAN reserves large virtual address ranges; a hard memory cap causes
+        # the forkserver to crash before any input is processed.
+        mem = "none" if self.config["fuzzer"].get("use_asan") else str(self.config["fuzzer"]["memory_limit"])
         cmd = [
             "afl-fuzz",
             "-i", corpus_dir,
             "-o", crashes_dir,
             "-t", str(self.config["fuzzer"]["exec_timeout"]),
-            "-m", str(self.config["fuzzer"]["memory_limit"]),
+            "-m", mem,
         ]
 
-        # Add custom mutator if available
+        # Add custom mutator if available and enabled
         mutator_files = list(Path(mutator_dir).glob("mutator_*.py"))
-        if mutator_files:
-            # Use the first mutator as primary
-            env_mutator = str(mutator_files[0])
-            env["AFL_CUSTOM_MUTATOR_LIBRARY"] = ""
-            env["AFL_PYTHON_MODULE"] = env_mutator
-            logger.info("Using custom mutator: %s", env_mutator)
+        if mutator_files and self.config["fuzzer"].get("use_custom_mutator", True):
+            mutator_path = mutator_files[0]
+            # LLM-generated fuzz() functions sometimes mutate buf in-place without
+            # returning it.  AFL++ expects bytes back; a None return causes a SIGSEGV.
+            # Write a shim that wraps fuzz() and guarantees a bytes result.
+            shim_path = mutator_path.parent / "_afl_shim.py"
+            shim_path.write_text(
+                f"import importlib.util as _ilu\n"
+                f"_spec = _ilu.spec_from_file_location('_m', r'{mutator_path}')\n"
+                f"_m = _ilu.module_from_spec(_spec)\n"
+                f"_spec.loader.exec_module(_m)\n"
+                f"init = getattr(_m, 'init', lambda seed: None)\n"
+                f"def fuzz(buf, add_buf, max_size):\n"
+                f"    r = _m.fuzz(buf, add_buf, max_size)\n"
+                f"    return bytes(r) if r is not None else bytes(buf) if buf else b''\n"
+            )
+            env["AFL_PYTHON_MODULE"] = shim_path.stem
+            env["PYTHONPATH"] = str(shim_path.parent) + ":" + env.get("PYTHONPATH", "")
+            logger.info("Using custom mutator: %s (via shim)", mutator_path)
 
         # Power schedule - use attention-guided if scheduler available
         if scheduler and scheduler.has_distance_matrix():
@@ -152,6 +168,11 @@ class AFLRunner:
             )
             return None
 
+        return self._read_stats_file()
+
+    def _read_stats_file(self) -> dict | None:
+        if not self._output_dir:
+            return None
         stats_path = Path(self._output_dir) / "default" / "fuzzer_stats"
         if not stats_path.exists():
             # Try alternate path
@@ -170,7 +191,7 @@ class AFLRunner:
             return None
 
         # Convert numeric fields
-        for field in ("paths_total", "unique_crashes", "unique_hangs"):
+        for field in ("paths_total", "unique_crashes", "unique_hangs", "execs_done"):
             if field in stats:
                 try:
                     stats[field] = int(stats[field])
