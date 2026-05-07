@@ -18,3 +18,21 @@ services:
     security_opt:
       - seccomp:unconfined
     command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py"]
+
+  jsoncpp:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.jsoncpp
+    volumes:
+      - ./workspace:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/jsoncpp.yml"]

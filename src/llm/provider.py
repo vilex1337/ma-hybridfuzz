@@ -111,6 +111,7 @@ def create_provider(config: dict) -> LLMProvider:
         from llm.self_hosted_provider import SelfHostedProvider
         base_url = llm_config.get("base_url") or os.getenv("SELF_HOSTED_BASE_URL", "")
         use_chat = llm_config.get("use_chat", True)
-        return SelfHostedProvider(model=model, base_url=base_url, use_chat=use_chat)
+        timeout = int(llm_config.get("timeout", 300))
+        return SelfHostedProvider(model=model, base_url=base_url, use_chat=use_chat, timeout=timeout)
 
     raise ValueError(f"Unhandled provider: {provider_name}")
