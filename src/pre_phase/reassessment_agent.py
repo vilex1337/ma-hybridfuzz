@@ -495,7 +495,7 @@ class ReassessmentAgent(LLMAgent):
         }
 
     @staticmethod
-    def find_best_queue_input(crashes_dir: str) -> dict | None:
+    def find_best_queue_input(output_dir: str) -> dict | None:
         """
         Return metadata for the highest-coverage input in the AFL++ queue.
 
@@ -508,7 +508,7 @@ class ReassessmentAgent(LLMAgent):
         Returns a dict with: name, size, hex_preview, text_preview — or None
         if no queue directory or files are found.
         """
-        base = Path(crashes_dir)
+        base = Path(output_dir)
         for queue_dir in [base / "default" / "queue", base / "queue"]:
             if not queue_dir.is_dir():
                 continue
