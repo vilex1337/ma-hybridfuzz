@@ -26,8 +26,6 @@ another plateau is detected (max N reassessments, configurable).
 import json
 import logging
 from pathlib import Path
-from typing import Any
-
 from pre_phase.base_agent import LLMAgent
 
 logger = logging.getLogger("pre_phase.reassessment")
@@ -65,39 +63,83 @@ class ReassessmentAgent(LLMAgent):
         stuck_duration_s: int,
         target_info: dict,
         bug_info: dict,
+        best_queue_input: dict | None = None,
+        deviation_function_name: str | None = None,
+        deviation_function_body: str = "",
+        goal_function_name: str | None = None,
+        program_usage: str = "",
     ) -> dict:
         """
-        Analyze the current fuzzing state to identify why the fuzzer has stalled.
+        Diagnose why the fuzzer is stuck by reasoning along the FCC.
 
-        This is the first of two LLM calls in the reassessment phase. It reads
-        the AFL++ runtime statistics, corpus state, and crash information to
-        form a hypothesis about the root cause of the plateau.
+        Mirrors reason_along_fcc (§3.3.2): given the highest-coverage input that
+        AFL++ has found, the deviation function (last FCC step the input reaches),
+        and the goal function (next step it fails to reach), the LLM reasons about
+        what blocks execution and what the priority gaps are.
+
+        The orchestrator determines deviation_function_name and goal_function_name
+        by running the coverage checker on the best queue input — the same mechanism
+        used in _generate_reachable_seeds().
 
         Args:
-            afl_stats        : parsed AFL++ fuzzer_stats dict
-            corpus_summary   : {count, total_bytes, format_sample, min_size, max_size}
-            crash_summary    : {unique_crashes, crash_signatures}
-            stuck_duration_s : seconds since last new coverage was seen
-            target_info      : {target_function, bug_type, input_format}
-            bug_info         : extracted bug information from pre-phase
+            afl_stats               : parsed AFL++ fuzzer_stats dict
+            corpus_summary          : {count, total_bytes, format_sample, min_size, max_size}
+            crash_summary           : {unique_crashes, crash_signatures}
+            stuck_duration_s        : seconds since last new coverage was seen
+            target_info             : {target_function, bug_type, input_format}
+            bug_info                : extracted bug information from pre-phase
+            best_queue_input        : highest-coverage AFL++ queue entry — dict with keys:
+                                      name, size, hex_preview, text_preview (may be None)
+            deviation_function_name : FCC function where the best input last diverges
+            deviation_function_body : source code of deviation_function_name (up to 2000 chars)
+            goal_function_name      : next FCC function the input fails to reach
+            program_usage           : program invocation context
 
         Returns dict with:
             stuck_type       : one of STUCK_TYPES
             cause            : natural-language explanation
-            hypothesis       : what the fuzzer would need to do to make progress
+            hypothesis       : what specific change to seeds/mutations could unblock progress
             priority_gaps    : list of unexplored input dimensions to target
             confidence       : 0.0–1.0 confidence in the diagnosis
         """
         afl_text = self._format_afl_stats(afl_stats)
         corpus_text = self._format_corpus_summary(corpus_summary)
         crash_text = self._format_crash_summary(crash_summary)
+        best_input_text = self._format_best_queue_input(best_queue_input)
+
+        # Build the FCC deviation section — mirrors reason_along_fcc's attachment
+        if deviation_function_name and goal_function_name:
+            deviation_section = (
+                f'### Deviation Function: "{deviation_function_name}"\n'
+                f"{deviation_function_body[:2000]}\n\n"
+                f'### Goal Function (next on FCC, not yet reached)\n'
+                f"{goal_function_name}\n\n"
+            )
+            task_stmt = (
+                f'The highest-coverage AFL++ input reaches "{deviation_function_name}" '
+                f'but fails to proceed to "{goal_function_name}". '
+                "Identify what in the deviation function blocks the execution path and "
+                "classify why the fuzzer has stalled."
+            )
+            suggestion_fcc = (
+                f'Look at the source of "{deviation_function_name}" to find the specific '
+                f'branch or condition that prevents execution from reaching "{goal_function_name}". '
+                "Note: macro-defined constants may not appear in the source; infer their "
+                "likely values from parameter and variable names. "
+            )
+        else:
+            deviation_section = ""
+            task_stmt = (
+                "Identify why the directed fuzzer has stalled — no FCC deviation point "
+                "could be determined from coverage data."
+            )
+            suggestion_fcc = ""
 
         prompt = self._build_query(
-            task=(
-                "Analyze why this directed fuzzer has stalled and identify the root "
-                "cause of the coverage plateau."
-            ),
+            task=task_stmt,
             attachment=(
+                f"### Highest-Coverage Input (from AFL++ queue)\n{best_input_text}\n\n"
+                f"{deviation_section}"
                 f"### AFL++ Runtime Statistics\n{afl_text}\n\n"
                 f"### Corpus State\n{corpus_text}\n\n"
                 f"### Crash Summary\n{crash_text}\n\n"
@@ -109,25 +151,28 @@ class ReassessmentAgent(LLMAgent):
                 f"Function : {bug_info.get('function', 'unknown')}\n"
                 f"Cause    : {bug_info.get('cause', 'unknown')}\n"
                 f"Trigger conditions: {', '.join(bug_info.get('trigger_conditions', []))}\n\n"
+                f"### Program Usage\n{program_usage}\n\n"
                 f"### Plateau Duration\n"
                 f"No new coverage for {stuck_duration_s} seconds."
             ),
             suggestion=(
+                f"{suggestion_fcc}"
                 f"Consider these possible stuck types: {', '.join(STUCK_TYPES)}. "
                 "Look for patterns: very low exec/s suggests format barriers, "
                 "high paths but no crashes suggests path constraints, identical "
                 "corpus sizes suggest mutator bias, low total paths suggest island isolation. "
-                "Cross-reference the trigger conditions with what the corpus currently covers."
+                "If multiple branches in the deviation function could lead to the goal, "
+                "list each as a separate priority gap."
             ),
             answer_template=(
                 "Return valid JSON:\n"
                 "```json\n"
                 "{\n"
                 '  "stuck_type": "<one of: island | format_barrier | path_constraint | coverage_cliff | mutator_bias>",\n'
-                '  "cause": "<concise explanation of why no progress is being made>",\n'
-                '  "hypothesis": "<what specific change to seeds or mutations could unblock progress>",\n'
+                '  "cause": "<what specific condition in the deviation function blocks progress>",\n'
+                '  "hypothesis": "<what change to the input would allow execution to reach the goal function>",\n'
                 '  "priority_gaps": [\n'
-                '    "<unexplored input dimension or condition to target>",\n'
+                '    "<specific branch condition or input property to target>",\n'
                 '    "..."\n'
                 '  ],\n'
                 '  "confidence": <0.0 to 1.0>\n'
@@ -139,8 +184,10 @@ class ReassessmentAgent(LLMAgent):
         try:
             result = self._parse_json(self._query_llm(prompt))
             logger.info(
-                "[Reassessment] Diagnosis: type=%s confidence=%.2f — %s",
+                "[Reassessment] Diagnosis: type=%s deviation=%s→%s confidence=%.2f — %s",
                 result.get("stuck_type", "?"),
+                deviation_function_name or "?",
+                goal_function_name or "?",
                 result.get("confidence", 0.0),
                 result.get("cause", "")[:100],
             )
@@ -377,6 +424,20 @@ class ReassessmentAgent(LLMAgent):
                 lines.append(f"    - {sig}")
         return "\n".join(lines)
 
+    def _format_best_queue_input(self, info: dict | None) -> str:
+        """Format the highest-coverage queue input for the LLM."""
+        if not info:
+            return "  (No AFL++ queue input available)"
+        lines = [
+            f"  File    : {info.get('name', '?')}",
+            f"  Size    : {info.get('size', 0)} bytes",
+            f"  Hex     : {info.get('hex_preview', '')}",
+        ]
+        text = info.get("text_preview", "").strip()
+        if text:
+            lines.append(f"  Content : {text[:200]}")
+        return "\n".join(lines)
+
     # -------------------------------------------------------------------------
     # Helper: build corpus/crash summaries from disk (called by orchestrator)
     # -------------------------------------------------------------------------
@@ -432,3 +493,47 @@ class ReassessmentAgent(LLMAgent):
             "unique_crashes": len(crash_files),
             "crash_signatures": signatures,
         }
+
+    @staticmethod
+    def find_best_queue_input(crashes_dir: str) -> dict | None:
+        """
+        Return metadata for the highest-coverage input in the AFL++ queue.
+
+        AFL++ places interesting inputs under <output>/default/queue/ and marks
+        those that added new coverage bits with '+cov' in the filename. Among
+        those files, the one discovered most recently (highest mtime) represents
+        the current coverage frontier. Falls back to any queue file when no
+        '+cov' entries exist.
+
+        Returns a dict with: name, size, hex_preview, text_preview — or None
+        if no queue directory or files are found.
+        """
+        base = Path(crashes_dir)
+        for queue_dir in [base / "default" / "queue", base / "queue"]:
+            if not queue_dir.is_dir():
+                continue
+            files = [f for f in queue_dir.iterdir() if f.is_file() and f.name.startswith("id:")]
+            if not files:
+                continue
+            # Prefer inputs that added new coverage bits
+            cov_files = [f for f in files if "+cov" in f.name]
+            candidates = cov_files if cov_files else files
+            # Most recently written = closest to the current coverage frontier
+            best = max(candidates, key=lambda f: f.stat().st_mtime)
+            try:
+                content = best.read_bytes()
+            except OSError:
+                continue
+            text_preview = ""
+            try:
+                text_preview = content[:256].decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            return {
+                "path": str(best),
+                "name": best.name,
+                "size": len(content),
+                "hex_preview": content[:64].hex(),
+                "text_preview": text_preview,
+            }
+        return None
