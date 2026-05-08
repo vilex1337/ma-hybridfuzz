@@ -79,26 +79,10 @@ class AFLRunner:
         ]
 
         # Add custom mutator if available and enabled
-        mutator_files = list(Path(mutator_dir).glob("mutator_*.py"))
+        mutator_files = list(Path(mutator_dir).glob("mutator_*.so"))
         if mutator_files and self.config["fuzzer"].get("use_custom_mutator", True):
-            mutator_path = mutator_files[0]
-            # LLM-generated fuzz() functions sometimes mutate buf in-place without
-            # returning it.  AFL++ expects bytes back; a None return causes a SIGSEGV.
-            # Write a shim that wraps fuzz() and guarantees a bytes result.
-            shim_path = mutator_path.parent / "_afl_shim.py"
-            shim_path.write_text(
-                f"import importlib.util as _ilu\n"
-                f"_spec = _ilu.spec_from_file_location('_m', r'{mutator_path}')\n"
-                f"_m = _ilu.module_from_spec(_spec)\n"
-                f"_spec.loader.exec_module(_m)\n"
-                f"init = getattr(_m, 'init', lambda seed: None)\n"
-                f"def fuzz(buf, add_buf, max_size):\n"
-                f"    r = _m.fuzz(buf, add_buf, max_size)\n"
-                f"    return bytes(r) if r is not None else bytes(buf) if buf else b''\n"
-            )
-            env["AFL_PYTHON_MODULE"] = shim_path.stem
-            env["PYTHONPATH"] = str(shim_path.parent) + ":" + env.get("PYTHONPATH", "")
-            logger.info("Using custom mutator: %s (via shim)", mutator_path)
+            env["AFL_CUSTOM_MUTATOR_LIBRARY"] = ";".join(str(f) for f in mutator_files)
+            logger.info("Using custom mutator libraries: %s", [f.name for f in mutator_files])
 
         # Power schedule - use attention-guided if scheduler available
         if scheduler and scheduler.has_distance_matrix():

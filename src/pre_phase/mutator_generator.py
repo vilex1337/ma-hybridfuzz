@@ -5,6 +5,8 @@ Mutator Generator - Creates bug-specific custom mutators for AFL++.
 
 import json
 import logging
+import shutil
+import subprocess
 import textwrap
 from pathlib import Path
 
@@ -13,34 +15,51 @@ from pre_phase.base_agent import _escape_controls_in_strings
 
 logger = logging.getLogger("pre_phase.mutator_gen")
 
-# Template for AFL++ custom mutator Python module.
-# NOTE: mutation_logic is inserted via str.format(); any literal braces in the
-# generated logic are pre-escaped ({{ / }}) before the call so that Python's
-# str.format() does not misinterpret dict-literals or f-string-like patterns.
-MUTATOR_TEMPLATE = '''"""Auto-generated custom mutator for AFL++: {name}"""
+# Template for AFL++ custom mutator C++ shared library.
+# mutation_logic must set *out_buf and return the new buffer size.
+MUTATOR_CPP_TEMPLATE = """\
+/* Auto-generated AFL++ custom mutator: {name} */
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
-import struct
-import random
+#define MAX_FILE (1 << 20)  /* 1 MiB — matches AFL++ default */
 
+typedef struct {{
+    unsigned int  seed;
+    uint8_t      *mutated_out;
+}} MutatorState;
 
-def init(seed):
-    random.seed(seed)
+#ifdef __cplusplus
+extern "C" {{
+#endif
 
+MutatorState *afl_custom_init(void *afl, unsigned int seed) {{
+    srand(seed);
+    MutatorState *data = (MutatorState *)calloc(1, sizeof(MutatorState));
+    if (!data) return NULL;
+    data->seed = seed;
+    data->mutated_out = (uint8_t *)malloc(MAX_FILE);
+    if (!data->mutated_out) {{ free(data); return NULL; }}
+    return data;
+}}
 
-def fuzz(buf, add_buf, max_size):
-    """Mutate input buffer. Returns mutated buffer."""
-    buf = bytearray(buf)
-    if len(buf) == 0:
-        buf = bytearray(b"\\x00" * 64)
-
+size_t afl_custom_fuzz(MutatorState *data, uint8_t *buf, size_t buf_size,
+                       uint8_t **out_buf, uint8_t *add_buf,
+                       size_t add_buf_size, size_t max_size) {{
 {mutation_logic}
+}}
 
-    return bytes(buf[:max_size])
+void afl_custom_deinit(MutatorState *data) {{
+    free(data->mutated_out);
+    free(data);
+}}
 
-
-def describe(max_description_length):
-    return b"{name}"[:max_description_length]
-'''
+#ifdef __cplusplus
+}}
+#endif
+"""
 
 
 class MutatorGenerator:
@@ -57,8 +76,7 @@ class MutatorGenerator:
 
         RANDLUZZ first asks the LLM to produce a Bug Analysis report (cause + how
         to trigger), then generates mutation strategies from that analysis, and
-        finally translates those strategies into C-level mutator code.  Here we
-        implement that same two-stage reasoning using the 4-part query scheme.
+        finally translates those strategies into C-level mutator code.
 
         Stage 1 - Bug Analysis:
             Input : Bug Info + Function Summary  (from ReasoningAgent outputs)
@@ -66,7 +84,7 @@ class MutatorGenerator:
 
         Stage 2 - Mutator Code Generation:
             Input : mutation suggestions + example mutators
-            Output: Python AFL++ custom mutator code
+            Output: C++ AFL++ custom mutator code, compiled to .so
         """
         bug_info = analysis.get("bug_info", {})
         func_summary = analysis.get("function_summary", {})
@@ -157,28 +175,36 @@ class MutatorGenerator:
         self, bug_type: str, bug_analysis: str
     ) -> str:
         """
-        Stage 2 of §3.4: translate mutation strategies into AFL++ mutator code.
+        Stage 2 of §3.4: translate mutation strategies into AFL++ C++ mutator code.
 
         Per RANDLUZZ, real C mutator code examples are included as context.
-        Here we include a Python AFL++ equivalent since the codebase uses Python mutators.
         """
         return (
             f"### Task\n"
             f"Translate the following mutation strategies into AFL++ custom mutator "
-            f"Python functions.\n\n"
+            f"C++ functions.\n\n"
             f"### Attachment\n"
             f"Bug Analysis:\n{bug_analysis}\n\n"
-            f"Example Mutator Structure:\n"
-            f"```python\n"
-            f"def fuzz(buf, add_buf, max_size):\n"
-            f"    buf = bytearray(buf)\n"
-            f"    # mutation logic here\n"
-            f"    return bytes(buf[:max_size])\n"
+            f"Example mutation_logic body (replaces the function body of afl_custom_fuzz):\n"
+            f"```c\n"
+            f"    /* copy input into pre-allocated buffer and append a null byte */\n"
+            f"    size_t new_size = buf_size + 1;\n"
+            f"    if (new_size > max_size) new_size = max_size;\n"
+            f"    memcpy(data->mutated_out, buf, buf_size);\n"
+            f"    if (new_size > buf_size) data->mutated_out[buf_size] = 0x00;\n"
+            f"    *out_buf = data->mutated_out;\n"
+            f"    return new_size;\n"
             f"```\n\n"
             f"### Suggestion\n"
-            f"Generate 3-5 mutators, one per strategy. Each mutator function should "
-            f"implement exactly one strategy. Use `struct`, `random`, and `len(buf)`. "
-            f"Ensure the code compiles and runs without errors.\n\n"
+            f"Generate 3-5 mutators, one per strategy. Each mutation_logic:\n"
+            f"- Is pure C (no C++ features needed, but C++ is allowed)\n"
+            f"- Has access to: data (MutatorState*, with data->mutated_out pre-allocated to MAX_FILE bytes),\n"
+            f"  buf (uint8_t*), buf_size (size_t), add_buf (uint8_t*),\n"
+            f"  add_buf_size (size_t), max_size (size_t), out_buf (uint8_t**)\n"
+            f"- Must copy/write into data->mutated_out, set *out_buf = data->mutated_out, and return the new size\n"
+            f"- Must NOT malloc a new buffer — reuse data->mutated_out\n"
+            f"- Must not use global state\n"
+            f"- May use rand() for randomness (seeded in afl_custom_init)\n\n"
             f"### Answer Template\n"
             f"Return valid JSON:\n"
             f"```json\n"
@@ -187,7 +213,7 @@ class MutatorGenerator:
             f"    {{\n"
             f'      "name": "<alphanumeric_underscore_name>",\n'
             f'      "description": "<what this mutator does>",\n'
-            f'      "mutation_logic": "<Python code body, indented 4 spaces, modifies buf bytearray>"\n'
+            f'      "mutation_logic": "<C code body indented 4 spaces; sets *out_buf, returns size_t>"\n'
             f"    }}\n"
             f"  ]\n"
             f"}}\n"
@@ -217,23 +243,54 @@ class MutatorGenerator:
         for mutator in mutators:
             name = mutator.get("name", "unknown_mutator")
             name = "".join(c for c in name if c.isalnum() or c == "_") or "unknown_mutator"
-            logic = mutator.get("mutation_logic", "    pass")
+            logic = mutator.get(
+                "mutation_logic",
+                "    size_t out_size = buf_size;\n"
+                "    uint8_t *copy = (uint8_t *)malloc(out_size);\n"
+                "    if (!copy) {\n"
+                "        *out_buf = buf;\n"
+                "        return buf_size;\n"
+                "    }\n"
+                "    if (out_size > 0) {\n"
+                "        memcpy(copy, buf, out_size);\n"
+                "    }\n"
+                "    *out_buf = copy;\n"
+                "    return out_size;",
+            )
 
-            # Normalise indentation: dedent then re-indent to exactly 4 spaces.
-            # textwrap.dedent removes common leading whitespace; textwrap.indent
-            # then re-applies a uniform 4-space prefix. This avoids the previous
-            # heuristic that double-indented already-indented lines.
             indented = textwrap.indent(textwrap.dedent(logic), "    ")
+            content = MUTATOR_CPP_TEMPLATE.format(name=name, mutation_logic=indented)
 
-            # str.format() substitutes {mutation_logic} and {name} in the template
-            # and inserts their values as-is (single-pass — no re-scanning of
-            # substituted text). Braces inside `indented` (dict literals, f-strings,
-            # etc.) are therefore safe without any escaping.
-            content = MUTATOR_TEMPLATE.format(name=name, mutation_logic=indented)
+            cpp_path = self.mutator_dir / f"mutator_{name}.cpp"
+            cpp_path.write_text(content)
 
-            fpath = self.mutator_dir / f"mutator_{name}.py"
-            fpath.write_text(content)
-            saved.append(fpath)
-            logger.info("Saved mutator: %s", name)
+            so_path = self._compile_mutator(cpp_path)
+            if so_path:
+                saved.append(so_path)
+                logger.info("Compiled mutator: %s", so_path.name)
+            else:
+                logger.warning("Skipping mutator %s — compile failed", name)
 
         return saved
+
+    def _compile_mutator(self, cpp_path: Path) -> Path | None:
+        compiler = shutil.which("clang++") or shutil.which("g++")
+        if not compiler:
+            logger.error("No C++ compiler found; cannot compile mutator %s", cpp_path.name)
+            return None
+
+        so_path = cpp_path.with_suffix(".so")
+        cmd = [compiler, "-shared", "-fPIC", "-O2", "-o", str(so_path), str(cpp_path)]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            logger.error("Compiler error for %s: %s", cpp_path.name, exc)
+            return None
+
+        if result.returncode != 0:
+            logger.error(
+                "Compile failed for %s:\n%s", cpp_path.name, result.stderr.strip()
+            )
+            return None
+
+        return so_path

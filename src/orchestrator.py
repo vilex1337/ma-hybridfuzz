@@ -339,6 +339,7 @@ class Orchestrator:
             "program_usage": program_usage,
             "target_function": target_function,
             "input_format": input_format,
+            "fcc": fcc,
         }
         # Write to disk so a restarted orchestrator can skip the LLM pre-phase.
         self.memory.save_pre_phase_ctx(target_function, bug_type, self._pre_phase_ctx)
@@ -844,6 +845,14 @@ class Orchestrator:
         # ── Build runtime summaries (no LLM) ─────────────────────────────────
         corpus_summary = ReassessmentAgent.summarize_corpus(corpus_dir)
         crash_summary = ReassessmentAgent.summarize_crashes(crashes_dir)
+        best_queue_input = ReassessmentAgent.find_best_queue_input(crashes_dir)
+        if best_queue_input:
+            logger.info(
+                "[Reassessment #%d] Best queue input: %s (%d bytes)",
+                reassessment_count, best_queue_input["name"], best_queue_input["size"],
+            )
+        else:
+            logger.debug("[Reassessment #%d] No AFL++ queue input found yet.", reassessment_count)
         coverage_before = int(afl_stats.get("paths_total", 0))
 
         target_info = {
@@ -852,6 +861,43 @@ class Orchestrator:
                          self.config["target"]["bug_type"]),
             "input_format": ctx.get("input_format", "unknown"),
         }
+
+        # ── FCC deviation detection (mirrors _generate_reachable_seeds) ──────
+        # Run coverage on the best queue input to find exactly where along the
+        # FCC execution stalls — the same mechanism used in the pre-phase.
+        fcc: list[str] = ctx.get("fcc") or []
+        deviation_function_name: str | None = None
+        deviation_function_body: str = ""
+        goal_function_name: str | None = None
+
+        if best_queue_input and len(fcc) >= 2:
+            binary = self.config["target"].get("binary", "")
+            try:
+                reached = self.coverage_checker.check_reached_functions(
+                    binary=binary,
+                    seed_file=best_queue_input["path"],
+                    candidate_functions=fcc,
+                )
+                derived_fn = self._find_derived_function(fcc, reached)
+                if derived_fn is None:
+                    derived_fn = fcc[0]
+                logger.info(
+                    "[Reassessment #%d] Coverage on best input: reached=%s derived=%s",
+                    reassessment_count, sorted(reached & set(fcc)), derived_fn,
+                )
+                derived_idx = fcc.index(derived_fn)
+                if derived_idx + 1 < len(fcc) and derived_fn != ctx.get("target_function"):
+                    deviation_function_name = derived_fn
+                    goal_function_name = fcc[derived_idx + 1]
+                    src = self._load_function_source(
+                        self.config["target"].get("source_dir", ""), derived_fn
+                    )
+                    deviation_function_body = src.get("body", "")
+            except Exception as exc:
+                logger.warning(
+                    "[Reassessment #%d] Coverage check failed: %s — diagnosing without deviation point.",
+                    reassessment_count, exc,
+                )
 
         # ── Persistent Memory: load history to avoid repeating failures ───────
         failed_strategies = self.memory.get_failed_strategies()
@@ -870,6 +916,11 @@ class Orchestrator:
             stuck_duration_s=plateau_s,
             target_info=target_info,
             bug_info=ctx.get("bug_info", {}),
+            best_queue_input=best_queue_input,
+            deviation_function_name=deviation_function_name,
+            deviation_function_body=deviation_function_body,
+            goal_function_name=goal_function_name,
+            program_usage=ctx.get("program_usage", ""),
         )
 
         # ── Call 2: Recovery plan (with persistent memory context) ────────────
