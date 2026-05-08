@@ -24,25 +24,35 @@ MUTATOR_CPP_TEMPLATE = """\
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct {{ uint32_t seed; }} MutatorState;
+#define MAX_FILE (1 << 20)  /* 1 MiB — matches AFL++ default */
+
+typedef struct {{
+    unsigned int  seed;
+    uint8_t      *mutated_out;
+}} MutatorState;
 
 #ifdef __cplusplus
 extern "C" {{
 #endif
 
-void *afl_custom_init(void *afl, unsigned int seed) {{
-    MutatorState *s = (MutatorState *)malloc(sizeof(MutatorState));
-    if (s) s->seed = seed;
-    return s;
+MutatorState *afl_custom_init(void *afl, unsigned int seed) {{
+    srand(seed);
+    MutatorState *data = (MutatorState *)calloc(1, sizeof(MutatorState));
+    if (!data) return NULL;
+    data->seed = seed;
+    data->mutated_out = (uint8_t *)malloc(MAX_FILE);
+    if (!data->mutated_out) {{ free(data); return NULL; }}
+    return data;
 }}
 
-size_t afl_custom_fuzz(void *data, uint8_t *buf, size_t buf_size,
-                        uint8_t **out_buf, uint8_t *add_buf,
-                        size_t add_buf_size, size_t max_size) {{
+size_t afl_custom_fuzz(MutatorState *data, uint8_t *buf, size_t buf_size,
+                       uint8_t **out_buf, uint8_t *add_buf,
+                       size_t add_buf_size, size_t max_size) {{
 {mutation_logic}
 }}
 
-void afl_custom_deinit(void *data) {{
+void afl_custom_deinit(MutatorState *data) {{
+    free(data->mutated_out);
     free(data);
 }}
 
@@ -177,25 +187,24 @@ class MutatorGenerator:
             f"Bug Analysis:\n{bug_analysis}\n\n"
             f"Example mutation_logic body (replaces the function body of afl_custom_fuzz):\n"
             f"```c\n"
-            f"    /* append up to 16 zero bytes */\n"
-            f"    size_t extra = (buf_size < max_size) ? 1 : 0;\n"
-            f"    size_t new_size = buf_size + extra;\n"
+            f"    /* copy input into pre-allocated buffer and append a null byte */\n"
+            f"    size_t new_size = buf_size + 1;\n"
             f"    if (new_size > max_size) new_size = max_size;\n"
-            f"    uint8_t *out = (uint8_t *)malloc(new_size);\n"
-            f"    if (!out) {{ *out_buf = buf; return buf_size; }}\n"
-            f"    memcpy(out, buf, buf_size);\n"
-            f"    if (extra) out[buf_size] = 0x00;\n"
-            f"    *out_buf = out;\n"
+            f"    memcpy(data->mutated_out, buf, buf_size);\n"
+            f"    if (new_size > buf_size) data->mutated_out[buf_size] = 0x00;\n"
+            f"    *out_buf = data->mutated_out;\n"
             f"    return new_size;\n"
             f"```\n\n"
             f"### Suggestion\n"
             f"Generate 3-5 mutators, one per strategy. Each mutation_logic:\n"
             f"- Is pure C (no C++ features needed, but C++ is allowed)\n"
-            f"- Has access to: buf (uint8_t*), buf_size (size_t), add_buf (uint8_t*),\n"
+            f"- Has access to: data (MutatorState*, with data->mutated_out pre-allocated to MAX_FILE bytes),\n"
+            f"  buf (uint8_t*), buf_size (size_t), add_buf (uint8_t*),\n"
             f"  add_buf_size (size_t), max_size (size_t), out_buf (uint8_t**)\n"
-            f"- Must set *out_buf to a malloc'd buffer and return the new size\n"
-            f"- Must not use global state (use the data pointer if needed)\n"
-            f"- Must include all needed #include headers inline if required (they go before the function)\n\n"
+            f"- Must copy/write into data->mutated_out, set *out_buf = data->mutated_out, and return the new size\n"
+            f"- Must NOT malloc a new buffer — reuse data->mutated_out\n"
+            f"- Must not use global state\n"
+            f"- May use rand() for randomness (seeded in afl_custom_init)\n\n"
             f"### Answer Template\n"
             f"Return valid JSON:\n"
             f"```json\n"
