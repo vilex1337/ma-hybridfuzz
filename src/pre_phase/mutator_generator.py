@@ -234,7 +234,20 @@ class MutatorGenerator:
         for mutator in mutators:
             name = mutator.get("name", "unknown_mutator")
             name = "".join(c for c in name if c.isalnum() or c == "_") or "unknown_mutator"
-            logic = mutator.get("mutation_logic", "    *out_buf = buf;\n    return buf_size;")
+            logic = mutator.get(
+                "mutation_logic",
+                "    size_t out_size = buf_size;\n"
+                "    uint8_t *copy = (uint8_t *)malloc(out_size);\n"
+                "    if (!copy) {\n"
+                "        *out_buf = NULL;\n"
+                "        return 0;\n"
+                "    }\n"
+                "    if (out_size > 0) {\n"
+                "        memcpy(copy, buf, out_size);\n"
+                "    }\n"
+                "    *out_buf = copy;\n"
+                "    return out_size;",
+            )
 
             indented = textwrap.indent(textwrap.dedent(logic), "    ")
             content = MUTATOR_CPP_TEMPLATE.format(name=name, mutation_logic=indented)

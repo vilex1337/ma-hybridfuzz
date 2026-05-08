@@ -505,8 +505,8 @@ class ReassessmentAgent(LLMAgent):
         the current coverage frontier. Falls back to any queue file when no
         '+cov' entries exist.
 
-        Returns a dict with: name, size, hex_preview, text_preview — or None
-        if no queue directory or files are found.
+        Returns a dict with: path, name, size, hex_preview, text_preview — or
+        None if no queue directory or files are found.
         """
         base = Path(output_dir)
         for queue_dir in [base / "default" / "queue", base / "queue"]:
