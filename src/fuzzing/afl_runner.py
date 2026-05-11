@@ -84,10 +84,16 @@ class AFLRunner:
             env["AFL_CUSTOM_MUTATOR_LIBRARY"] = ";".join(str(f) for f in mutator_files)
             logger.info("Using custom mutator libraries: %s", [f.name for f in mutator_files])
 
+        # Pass AFLGo-format distance file if available (written by AttentionDistanceComputer)
+        dist_cfg = Path(self.config["paths"]["distance_cache"]) / "distance.cfg.txt"
+        if dist_cfg.exists():
+            env["AFL_LLVM_AFLGO_INST_RATIO"] = "100"
+            env["AFL_CUSTOM_INFO_OUT"] = str(dist_cfg)
+            logger.info("Using attention distance file: %s", dist_cfg)
+
         # Power schedule - use attention-guided if scheduler available
         if scheduler and scheduler.has_distance_matrix():
             cmd.extend(["-p", "exploit"])
-            # Write distance file for AFL++ if supported
             distance_file = scheduler.export_afl_distance_file()
             if distance_file:
                 env["AFL_DISTANCE_FILE"] = distance_file

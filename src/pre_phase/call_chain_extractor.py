@@ -191,6 +191,8 @@ class CallChainExtractor:
             lang = "c++" if suffix in (".cpp", ".cc", ".cxx") else "c"
             args = [f"-x{lang}", "-std=gnu11" if lang == "c" else "-std=gnu++17"]
 
+        if self._index is None:
+            return
         tu = self._index.parse(filepath, args=args)
         if tu is None:
             return

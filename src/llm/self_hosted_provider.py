@@ -16,6 +16,7 @@ Environment variable fallback:
 """
 
 import logging
+import time
 
 import requests
 
@@ -24,6 +25,8 @@ from llm.provider import LLMProvider
 logger = logging.getLogger("llm.self_hosted")
 
 _DEFAULT_TIMEOUT = 600  # seconds
+_RETRY_BASE = 5   # seconds; delay = base * 2^attempt → 5, 10, 20, 40 s
+_MAX_RETRIES = 4
 
 
 class SelfHostedProvider(LLMProvider):
@@ -50,6 +53,30 @@ class SelfHostedProvider(LLMProvider):
             return self._chat(prompt, max_tokens, temperature)
         return self._generate(prompt, max_tokens, temperature)
 
+    def _post_with_retry(self, url: str, payload: dict) -> requests.Response:
+        """POST with exponential-of-2 retry on temporary errors (5xx, connection, timeout)."""
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                resp = requests.post(url, json=payload, timeout=self.timeout)
+                resp.raise_for_status()
+                return resp
+            except Exception as exc:
+                temporary = (
+                    isinstance(exc, requests.exceptions.HTTPError)
+                    and exc.response is not None
+                    and exc.response.status_code >= 500
+                ) or isinstance(exc, (requests.exceptions.ConnectionError,
+                                      requests.exceptions.Timeout))
+                if attempt == _MAX_RETRIES or not temporary:
+                    raise
+                delay = _RETRY_BASE * (2 ** attempt)
+                logger.warning(
+                    "LLM request failed (%s); retry %d/%d in %ds",
+                    exc, attempt + 1, _MAX_RETRIES, delay,
+                )
+                time.sleep(delay)
+        raise RuntimeError("unreachable")  # satisfies type checkers
+
     def _chat(self, prompt: str, max_tokens: int, temperature: float) -> str:
         payload = {
             "messages": [{"role": "user", "content": prompt}],
@@ -57,12 +84,7 @@ class SelfHostedProvider(LLMProvider):
             "temperature": temperature,
             "do_sample": temperature > 0,
         }
-        resp = requests.post(
-            f"{self.base_url}/chat",
-            json=payload,
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
+        resp = self._post_with_retry(f"{self.base_url}/chat", payload)
         return resp.json().get("content", "")
 
     def _generate(self, prompt: str, max_tokens: int, temperature: float) -> str:
@@ -72,10 +94,5 @@ class SelfHostedProvider(LLMProvider):
             "temperature": temperature,
             "do_sample": temperature > 0,
         }
-        resp = requests.post(
-            f"{self.base_url}/generate",
-            json=payload,
-            timeout=self.timeout,
-        )
-        resp.raise_for_status()
+        resp = self._post_with_retry(f"{self.base_url}/generate", payload)
         return resp.json().get("generated_text", "")

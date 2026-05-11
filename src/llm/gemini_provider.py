@@ -3,8 +3,8 @@
 import logging
 import os
 
-from google import genai
-from google.genai import types
+from google import genai  # type: ignore[import-untyped]
+from google.genai import types  # type: ignore[import-untyped]
 
 from llm.provider import LLMProvider
 

@@ -6,7 +6,15 @@ BUILD_DIR   := $(JSONCPP_SRC)/cmake_build_$(_CXX_SLUG)
 
 .PHONY: all clean jsoncpp_fuzzer
 
+.PHONY: ast_dump
+
 all: jsoncpp_fuzzer
+
+ast_dump:
+	clang -Xclang -ast-dump -fsyntax-only \
+	    -I$(JSONCPP_SRC)/include \
+	    -I$(JSONCPP_SRC)/src/test_lib_json \
+	    $(JSONCPP_SRC)/src/test_lib_json/fuzz.cpp
 
 # Always recompile so each invocation uses the current CXX/CXXFLAGS.
 # main_stub.cpp provides a plain file-reading main() — avoids the

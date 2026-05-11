@@ -35,6 +35,11 @@ fuzzer:
   use_asan: true
   use_ubsan: true
 
+attention_distance:
+  # URL of the LineVul attention distance server (inference/linevul_attention_distance_server.ipynb)
+  # Run the Kaggle notebook and paste the ngrok Public URL here.
+  server_url: ""  # e.g., "https://<id>.ngrok-free.app"
+
 scheduler:
   attention_weight: 0.6  # Weight for attention distance in scheduling
   coverage_weight: 0.3   # Weight for coverage novelty

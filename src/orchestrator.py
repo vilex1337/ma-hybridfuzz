@@ -16,7 +16,7 @@ from pre_phase.reassessment_agent import ReassessmentAgent
 from pre_phase.persistent_memory import PersistentMemory
 from pre_phase.seed_generator import SeedGenerator
 from pre_phase.mutator_generator import MutatorGenerator
-from pre_phase.attention_computer import AttentionComputer
+from pre_phase.attention_distance_computer import AttentionDistanceComputer
 from pre_phase.call_chain_extractor import CallChainExtractor
 from pre_phase.coverage_checker import CoverageChecker
 from fuzzing.afl_runner import AFLRunner
@@ -51,7 +51,7 @@ class Orchestrator:
         self.memory = PersistentMemory(self.config)
         self.seed_gen = SeedGenerator(self.config)
         self.mutator_gen = MutatorGenerator(self.config)
-        self.attention = AttentionComputer(self.config)
+        self.attention = AttentionDistanceComputer(self.config)
         self.call_chain = CallChainExtractor(self.config)
         self.coverage_checker = CoverageChecker(self.config)
         self.afl = AFLRunner(self.config)
@@ -528,6 +528,8 @@ class Orchestrator:
             "[Pre-phase Opt] No fastest path — reasoning from neighbour functions"
         )
         seeds = list(existing_seeds)
+        if not self.config.get("attention", {}).get("enabled", True):
+            return seeds
         neighbor_names = self.attention.get_neighbors(target_function, top_k=3)
         for neighbor_name in neighbor_names:
             neighbor_src = self._load_function_source(source_dir, neighbor_name)
@@ -722,7 +724,9 @@ class Orchestrator:
         instrumented = self._instrumented_binary
 
         # Load pre-computed data
-        distance_matrix = self.attention.load_cached()
+        distance_matrix = {}
+        if self.config.get("attention", {}).get("enabled", True):
+            distance_matrix = self.attention.load_cached()
         self.scheduler.set_distance_matrix(distance_matrix)
 
         # Start AFL++ with custom scheduler and mutators
