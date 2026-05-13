@@ -117,9 +117,8 @@ class Orchestrator:
                     " -> ".join(fcc),
                 )
             else:
-                compile_commands_dir = self.config["target"].get("compile_commands_dir")
                 logger.info(
-                    "[Pre-phase FCC] No cached FCC — extracting from Clang AST "
+                    "[Pre-phase FCC] No cached FCC — extracting from LLVM IR "
                     "(source_dir=%s, target=%s)...",
                     source_dir,
                     target_function,
@@ -127,7 +126,6 @@ class Orchestrator:
                 fcc = self.call_chain.extract(
                     source_dir=source_dir,
                     target_function=target_function,
-                    compile_commands_dir=compile_commands_dir,
                 )
                 if fcc:
                     logger.info(

@@ -24,13 +24,15 @@ Used for: computing attention-based distances per basic block (pre-phase, Gap 1)
 
 Notebook: `inference/linevul_attention_distance_server.ipynb`
 
-1. Upload `linevul_attention_distance_server.ipynb` to Kaggle
-2. Kaggle Secrets required (same as Server 1):
-   - `NGROK_TOKEN`
-   - `HF_TOKEN`
-3. Session option → Accelerator: **GPU T4 x1** (LineVul is ~125M params, single T4 is sufficient)
-4. Run all cells
+1. Open [Google Colab](https://colab.research.google.com) and upload the notebook
+2. Runtime → Change runtime type → **T4 GPU**
+3. Colab Secrets required (left sidebar → key icon):
+   - `NGROK_TOKEN` — from https://dashboard.ngrok.com/get-started/your-authtoken
+4. Run all cells — the notebook downloads LineVul weights (~500 MB) from Google Drive automatically
 5. Copy the `Public URL` from cell 7 → paste into config as `attention_distance.server_url`
+
+> Note: No `HF_TOKEN` needed. `microsoft/codebert-base` is public. LineVul weights are
+> fetched from the authors' Google Drive (`awsm-research/LineVul`) at startup.
 
 **Endpoints exposed:**
 
