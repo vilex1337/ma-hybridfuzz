@@ -1,0 +1,13 @@
+{
+  "include": ["src"],
+  "venvPath": ".",
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Linux",
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "none",
+  "executionEnvironments": [
+    {
+      "root": "src"
+    }
+  ]
+}
