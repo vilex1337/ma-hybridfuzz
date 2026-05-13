@@ -50,10 +50,4 @@ Notebook: `inference/linevul_attention_distance_server.ipynb`
 
 ## Running Both Servers Simultaneously
 
-If Kaggle budget allows, both notebooks can run in separate Kaggle sessions concurrently.
-Alternatively, run Server 2 once in pre-phase to compute + cache attention distances,
-then shut it down before starting the Qwen server for LLM calls.
-
-### Alternative: 
-* Combine 2 server to 1.
-* Host 1 on Kaggle, 1 on Colab
+Host Server 1 on Kaggle, Server 2 on Google Colab
