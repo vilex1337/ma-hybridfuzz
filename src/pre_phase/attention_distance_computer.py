@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from logging_utils import VERBOSE_LEVEL
 from pre_phase.cfg_extractor import CFGExtractor
 from pre_phase.linevul_scorer import LineVulScorer
 
@@ -39,7 +40,7 @@ class AttentionDistanceComputer:
 
         server_url = config.get("attention_distance", {}).get("server_url", "")
         self._scorer = LineVulScorer(server_url)
-        self._extractor = CFGExtractor()
+        self._extractor = CFGExtractor(config)
 
         # State loaded by load_cached() or set by compute()
         self._functions: list[str] = []
@@ -58,9 +59,24 @@ class AttentionDistanceComputer:
             return
 
         logger.info("Extracted %d blocks from %d functions", len(blocks), len(call_graph))
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Attention] CFG stats: blocks=%d functions=%d call_edges=%d target=%s",
+            len(blocks),
+            len(call_graph),
+            sum(len(v) for v in call_graph.values()),
+            target_function,
+        )
 
         # Physical distances: BFS on call graph (function level)
         phys_dist = self._bfs_distances(call_graph, target_function)
+        reachable_funcs = [fn for fn, dist in phys_dist.items() if dist < INF_DIST]
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Attention] Physical distance BFS: reachable_functions=%d target_present=%s",
+            len(reachable_funcs),
+            target_function in phys_dist,
+        )
 
         # Score blocks via LineVul server
         if self._scorer.is_available():
@@ -68,9 +84,19 @@ class AttentionDistanceComputer:
             w_scores = self._scorer.score_blocks(
                 {bb_id: b["source"] for bb_id, b in blocks.items() if b["source"]}
             )
+            logger.log(
+                VERBOSE_LEVEL,
+                "[Attention] LineVul scores received: scored_blocks=%d",
+                len(w_scores),
+            )
         else:
             logger.warning("LineVul server not available; using uniform attention scores")
             w_scores = {bb_id: 0.5 for bb_id in blocks}
+            logger.log(
+                VERBOSE_LEVEL,
+                "[Attention] Uniform attention scores applied: blocks=%d score=0.5",
+                len(w_scores),
+            )
 
         # Compute attention distances per block (formula 9)
         self._block_distances = {}
@@ -84,6 +110,17 @@ class AttentionDistanceComputer:
         func_dist = self._aggregate_to_functions(blocks, self._block_distances)
         self._target = target_function
         self._functions, self._matrix = self._build_matrix(func_dist, target_function)
+        finite_block_distances = [
+            dist for dist in self._block_distances.values() if np.isfinite(dist)
+        ]
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Attention] Distance computation complete: block_distances=%d finite=%d function_distances=%d matrix_shape=%s",
+            len(self._block_distances),
+            len(finite_block_distances),
+            len(func_dist),
+            self._matrix.shape if self._matrix is not None else None,
+        )
 
         # Persist
         self._write_distance_cfg_txt(blocks, self._block_distances)

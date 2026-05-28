@@ -49,6 +49,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from logging_utils import VERBOSE_LEVEL
+
 logger = logging.getLogger("pre_phase.coverage")
 
 _DEFAULT_TIMEOUT = 10   # seconds per execution
@@ -101,6 +103,15 @@ class CoverageChecker:
         )
         out_binary = str(out_binary_base) + "_covbuild"
         binary_name = reference_binary_path.stem
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Coverage] Build plan: source_dir=%s reference=%s output=%s binary_name=%s llvm_suffix=%s",
+            source_dir,
+            reference_binary,
+            out_binary,
+            binary_name,
+            self._llvm_suffix or "<default>",
+        )
         success = self._compile_coverage_binary(source_dir, out_binary, binary_name)
         if success:
             self._cov_binary = out_binary
@@ -130,6 +141,13 @@ class CoverageChecker:
         """
         if not candidate_functions:
             return set()
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Coverage] Checking runtime reachability: binary=%s seed=%s candidates=%d",
+            binary,
+            seed_file,
+            len(candidate_functions),
+        )
 
         fallback: set[str] = {candidate_functions[0]}
 
@@ -194,6 +212,13 @@ class CoverageChecker:
         ]
 
         logger.info("[Coverage] Compiling coverage binary: %s", out_binary)
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Coverage] Coverage compile settings: cc=%s cxx=%s flags=%s",
+            cc,
+            cxx,
+            extra_cflags,
+        )
         return build_binary(source_dir, out_binary, cc, cxx, binary_name, extra_cflags=extra_cflags)
 
     # ------------------------------------------------------------------
@@ -228,6 +253,14 @@ class CoverageChecker:
         else:
             cmd = [cov_binary] + raw_args
             stdin_src = seed_path
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Coverage] Executing coverage probe: cmd=%s stdin=%s profraw=%s timeout=%.1fs",
+            " ".join(cmd),
+            stdin_src or "<none>",
+            profraw,
+            timeout,
+        )
 
         try:
             if stdin_src is not None:
@@ -248,6 +281,7 @@ class CoverageChecker:
                 )
             # The profile is written on normal AND crash exit; check it exists.
             if Path(profraw).stat().st_size > 0:
+                logger.log(VERBOSE_LEVEL, "[Coverage] Profile captured: %s", profraw)
                 return profraw
             logger.warning("[Coverage] profraw file is empty")
             return None
@@ -281,6 +315,13 @@ class CoverageChecker:
     ) -> set[str]:
         merge_bin = self._tool("llvm-profdata")
         cov_bin   = self._tool("llvm-cov")
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Coverage] Parsing coverage: merge_bin=%s cov_bin=%s candidates=%d",
+            merge_bin,
+            cov_bin,
+            len(candidates),
+        )
 
         # llvm-profdata merge
         try:
@@ -322,7 +363,14 @@ class CoverageChecker:
             logger.warning("[Coverage] llvm-cov export failed: %s", r.stderr[:200])
             return set()
 
-        return self._extract_hit_functions(r.stdout, candidates)
+        reached = self._extract_hit_functions(r.stdout, candidates)
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Coverage] Coverage parse complete: reached=%d/%d",
+            len(reached),
+            len(candidates),
+        )
+        return reached
 
     @staticmethod
     def _extract_hit_functions(json_text: str, candidates: set[str]) -> set[str]:

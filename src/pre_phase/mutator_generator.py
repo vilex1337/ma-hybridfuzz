@@ -10,6 +10,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from logging_utils import VERBOSE_LEVEL
 from llm.provider import create_provider
 from pre_phase.base_agent import _escape_controls_in_strings
 
@@ -106,6 +107,14 @@ class MutatorGenerator:
                 max_tokens=self.config["llm"]["max_tokens"],
                 temperature=0.2,
             )
+            logger.log(
+                VERBOSE_LEVEL,
+                "[LLM] Reasoning response: agent=%s stage=bug_analysis model=%s chars=%d\n%s",
+                type(self).__name__,
+                self.provider.model,
+                len(bug_analysis_text),
+                bug_analysis_text,
+            )
         except Exception as e:
             logger.error("Bug analysis LLM call failed: %s", e)
             bug_analysis_text = f"Bug type: {bug_type}\nRoot cause: {vuln_pattern}"
@@ -119,6 +128,14 @@ class MutatorGenerator:
             prompt=mutator_prompt,
             max_tokens=self.config["llm"]["max_tokens"],
             temperature=self.config["llm"]["temperature"],
+        )
+        logger.log(
+            VERBOSE_LEVEL,
+            "[LLM] Reasoning response: agent=%s stage=mutator_generation model=%s chars=%d\n%s",
+            type(self).__name__,
+            self.provider.model,
+            len(response_text),
+            response_text,
         )
 
         mutators = self._parse_mutators(response_text)

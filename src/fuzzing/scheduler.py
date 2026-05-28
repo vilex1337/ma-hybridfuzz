@@ -10,6 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
+from logging_utils import VERBOSE_LEVEL
+
 logger = logging.getLogger("fuzzing.scheduler")
 
 
@@ -38,6 +40,12 @@ class AttentionScheduler:
                 "Loaded distance matrix: %d functions, target=%s",
                 len(self._functions),
                 self._target,
+            )
+            logger.log(
+                VERBOSE_LEVEL,
+                "[Scheduler] Distance matrix initialized: shape=%s weights=%s",
+                self._distance_matrix.shape,
+                self._weights,
             )
 
     def has_distance_matrix(self) -> bool:
@@ -127,10 +135,18 @@ class AttentionScheduler:
         distances = {}
         for i, func in enumerate(functions):
             distances[func] = float(matrix[i][target_idx])
+        finite = [distance for distance in distances.values() if np.isfinite(distance)]
 
         output_path = Path(self.config["paths"]["distance_cache"]) / "afl_distances.json"
         with open(output_path, "w") as f:
             json.dump(distances, f, indent=2)
 
         logger.info("Exported AFL distance file: %s", output_path)
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Scheduler] Exported scheduler distances: functions=%d finite=%d target=%s",
+            len(distances),
+            len(finite),
+            target,
+        )
         return str(output_path)

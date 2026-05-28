@@ -1,6 +1,9 @@
 # MA-HybridFuzz — jsoncpp_jsoncpp_fuzzer target
 # Mirrors the FuzzBench benchmark: benchmarks/jsoncpp_jsoncpp_fuzzer
 
+logging:
+  verbosity: 1
+
 attention:
   enabled: true   # temporarily disabled; re-enable once LLM inference is stable
 
@@ -9,6 +12,7 @@ target:
   binary: "/targets/jsoncpp_fuzz/jsoncpp_fuzzer"
   source_dir: "/targets/jsoncpp"
   build_dir: "/targets/jsoncpp_fuzz"
+  ir_build_dir: "/targets/jsoncpp_fuzz"
   target_function: "readValue"   # core recursive-descent parser; plain identifier reachable by BFS
   bug_type: "heap_buffer_overflow"
   args: ["@@"]   # AFL++ replaces @@ with the seed file path; libAFLDriver reads it
@@ -23,7 +27,7 @@ target:
 llm:
   provider: "self_hosted"
   model: "qwen2.5-coder-14b"
-  base_url: "https://ad95-35-221-155-128.ngrok-free.app/"
+  base_url: "https://cb17-34-170-63-74.ngrok-free.app/"
   use_chat: true
   max_tokens: 4096
   temperature: 0.3
@@ -40,7 +44,7 @@ fuzzer:
   use_custom_mutator: false   # temporarily disabled
 
 attention_distance:
-  server_url: "https://76e4-34-127-33-242.ngrok-free.app/"  # paste ngrok URL from linevul_attention_distance_server.ipynb
+  server_url: "https://1169-34-143-164-186.ngrok-free.app/"  # paste ngrok URL from linevul_attention_distance_server.ipynb
 
 scheduler:
   attention_weight: 0.6
@@ -50,7 +54,7 @@ scheduler:
 reassessment:
   plateau_threshold: 300
   reassessment_coverage_rate: 0.05
-  max_reassessments: 20
+  max_reassessments: 100
 
 paths:
   corpus: "/workspace/corpus"

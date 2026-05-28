@@ -15,6 +15,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from logging_utils import VERBOSE_LEVEL
+
 logger = logging.getLogger("pre_phase.binary_builder")
 
 _COMPILE_TIMEOUT = 300  # seconds
@@ -54,11 +56,24 @@ def build_binary(
         build_env["CXXFLAGS"] = (build_env.get("CXXFLAGS", "") + " " + flags_str).strip()
 
     ncpus = str(os.cpu_count() or 1)
+    logger.log(
+        VERBOSE_LEVEL,
+        "[Builder] Initializing build: source_dir=%s out=%s cc=%s cxx=%s binary_name=%s flags=%s",
+        source_path,
+        out_binary,
+        cc,
+        cxx,
+        binary_name,
+        flags_str or "<none>",
+    )
 
     if (source_path / "CMakeLists.txt").exists():
+        logger.log(VERBOSE_LEVEL, "[Builder] Detected build system: cmake")
         return _cmake_build(source_path, out_binary, cc, cxx, binary_name, build_env, flags_str, ncpus)
     if (source_path / "Makefile").exists():
+        logger.log(VERBOSE_LEVEL, "[Builder] Detected build system: make")
         return _make_build(source_path, out_binary, binary_name, build_env, ncpus)
+    logger.log(VERBOSE_LEVEL, "[Builder] Detected build system: single-file")
     return _single_file_build(source_path, out_binary, cc, cxx, extra_cflags or [], build_env)
 
 
@@ -70,9 +85,11 @@ def _cmake_build(source_path, out_binary, cc, cxx, binary_name, env, flags_str, 
     cmake_cmd = ["cmake", "..", f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}"]
     if flags_str:
         cmake_cmd += [f"-DCMAKE_C_FLAGS={flags_str}", f"-DCMAKE_CXX_FLAGS={flags_str}"]
+    logger.log(VERBOSE_LEVEL, "[Builder] CMake configure: cwd=%s cmd=%s", build_dir, " ".join(cmake_cmd))
     try:
         subprocess.run(cmake_cmd, cwd=build_dir, env=env, check=True,
                        capture_output=True, text=True, timeout=_COMPILE_TIMEOUT)
+        logger.log(VERBOSE_LEVEL, "[Builder] CMake build: cwd=%s cmd=make -j%s", build_dir, ncpus)
         subprocess.run(["make", f"-j{ncpus}"], cwd=build_dir, env=env, check=True,
                        capture_output=True, text=True, timeout=_COMPILE_TIMEOUT)
     except FileNotFoundError as exc:
@@ -88,6 +105,7 @@ def _cmake_build(source_path, out_binary, cc, cxx, binary_name, env, flags_str, 
 
 
 def _make_build(source_path, out_binary, binary_name, env, ncpus) -> bool:
+    logger.log(VERBOSE_LEVEL, "[Builder] Make build: cwd=%s cmd=make -j%s", source_path, ncpus)
     try:
         subprocess.run(
             ["make", f"-j{ncpus}"],
@@ -139,6 +157,12 @@ def _single_file_build(source_path, out_binary, cc, cxx, extra_cflags, env) -> b
 
 
 def _find_and_copy(search_dir: Path, binary_name: str, dest: str) -> bool:
+    logger.log(
+        VERBOSE_LEVEL,
+        "[Builder] Locating built binary: search_dir=%s binary_name=%s",
+        search_dir,
+        binary_name,
+    )
     for f in search_dir.rglob(binary_name):
         if f.is_file() and os.access(f, os.X_OK):
             os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)

@@ -15,6 +15,7 @@ BFS over the resulting call graph.
 import logging
 from collections import deque
 
+from logging_utils import VERBOSE_LEVEL
 from pre_phase.cfg_extractor import CFGExtractor
 
 logger = logging.getLogger("pre_phase.call_chain")
@@ -25,7 +26,7 @@ class CallChainExtractor:
 
     def __init__(self, config: dict):
         self.config = config
-        self._extractor = CFGExtractor()
+        self._extractor = CFGExtractor(config)
 
     def extract(
         self,
@@ -40,6 +41,11 @@ class CallChainExtractor:
         for ep in self.config.get("target", {}).get("entry_points", []):
             if ep not in entry_points:
                 entry_points.append(ep)
+        logger.log(
+            VERBOSE_LEVEL,
+            "[CallChain] Entry point candidates: %s",
+            entry_points,
+        )
 
         logger.info(
             "[CallChain] Building call graph for source_dir=%s target=%s",

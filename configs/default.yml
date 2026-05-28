@@ -1,8 +1,18 @@
 # MA-HybridFuzz Configuration
 
+logging:
+  # 0 = warnings/errors only
+  # 1 = high-level pipeline logs
+  # 2 = important internals: IR building, builder decisions, fuzzer init, distance stats
+  # 3 = full debug logs
+  verbosity: 1
+
 target:
   binary: ""           # Path to target binary (inside container)
   source_dir: ""       # Path to target source code
+  # Optional: Makefile directory with an `ir` target. Defaults to build_dir,
+  # then source_dir. The target should write .ll files to $IR_DIR.
+  # ir_build_dir: ""
   target_function: ""  # Target function name to reach
   bug_type: ""         # e.g., buffer_overflow, use_after_free, integer_overflow
   args: ["@@"]         # CLI args for the binary; "@@" is replaced with the seed

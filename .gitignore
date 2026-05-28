@@ -74,3 +74,8 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+
+# Cache and run history
+logs/
+cache/
+
