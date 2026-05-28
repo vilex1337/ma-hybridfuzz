@@ -2,7 +2,7 @@
 # Mirrors the FuzzBench benchmark: benchmarks/jsoncpp_jsoncpp_fuzzer
 
 attention:
-  enabled: false   # temporarily disabled; re-enable once LLM inference is stable
+  enabled: true   # temporarily disabled; re-enable once LLM inference is stable
 
 target:
   # binary stem must match the executable name produced by targets/jsoncpp/Makefile.
@@ -23,7 +23,7 @@ target:
 llm:
   provider: "self_hosted"
   model: "qwen2.5-coder-14b"
-  base_url: "https://1719-34-61-130-0.ngrok-free.app/"
+  base_url: "https://ad95-35-221-155-128.ngrok-free.app/"
   use_chat: true
   max_tokens: 4096
   temperature: 0.3
@@ -40,7 +40,7 @@ fuzzer:
   use_custom_mutator: false   # temporarily disabled
 
 attention_distance:
-  server_url: "https://96d7-34-126-188-3.ngrok-free.app/"  # paste ngrok URL from linevul_attention_distance_server.ipynb
+  server_url: "https://76e4-34-127-33-242.ngrok-free.app/"  # paste ngrok URL from linevul_attention_distance_server.ipynb
 
 scheduler:
   attention_weight: 0.6
@@ -49,7 +49,8 @@ scheduler:
 
 reassessment:
   plateau_threshold: 300
-  max_reassessments: 5
+  reassessment_coverage_rate: 0.05
+  max_reassessments: 20
 
 paths:
   corpus: "/workspace/corpus"

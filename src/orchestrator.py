@@ -739,12 +739,16 @@ class Orchestrator:
 
         # Monitor loop
         timeout = self.config["fuzzer"]["timeout"]
-        plateau_threshold = self.config["reassessment"]["plateau_threshold"]
-        max_reassessments = self.config["reassessment"]["max_reassessments"]
+        reassessment_cfg = self.config.get("reassessment", {})
+        plateau_threshold = reassessment_cfg.get("plateau_threshold", 300)
+        max_reassessments = reassessment_cfg.get("max_reassessments", 5)
+        reassessment_coverage_rate = self._normalize_rate(
+            reassessment_cfg.get("reassessment_coverage_rate", 0.05)
+        )
         reassessment_count = 0
         last_reassessment_coverage = 0   # coverage at the time of last reassessment
-        last_new_coverage_time = time.time()
-        last_coverage_count = 0
+        coverage_window_start_time = time.time()
+        coverage_window_start_count = 0
         start_time = time.time()
         while self._running and (time.time() - start_time) < timeout:
             time.sleep(10)
@@ -754,10 +758,6 @@ class Orchestrator:
 
             current_coverage = stats.get("paths_total", 0)
             crashes = stats.get("unique_crashes", 0)
-
-            if current_coverage > last_coverage_count:
-                last_coverage_count = current_coverage
-                last_new_coverage_time = time.time()
 
             elapsed = time.time() - start_time
             logger.info(
@@ -781,20 +781,53 @@ class Orchestrator:
                 last_reassessment_coverage = current_coverage
 
             # ── Phase 3: On-Demand Reassessment ──────────────────────────────
-            plateau_time = time.time() - last_new_coverage_time
-            if plateau_time > plateau_threshold and reassessment_count < max_reassessments:
-                logger.info(
-                    "[Reassessment #%d] Plateau detected (%ds). Activating LLM...",
-                    reassessment_count + 1,
-                    int(plateau_time),
-                )
-                self._run_reassessment(stats, reassessment_count + 1, int(plateau_time))
-                reassessment_count += 1
-                last_reassessment_coverage = current_coverage
-                last_new_coverage_time = time.time()
+            now = time.time()
+            plateau_time = now - coverage_window_start_time
+            coverage_increase_rate = self._coverage_increase_rate(
+                coverage_window_start_count,
+                current_coverage,
+            )
+            if plateau_time >= plateau_threshold:
+                if (
+                    coverage_increase_rate < reassessment_coverage_rate
+                ):
+                    logger.info(
+                        "[Reassessment #%d] Plateau detected (%ds, coverage increase %.2f%% < %.2f%%). Activating LLM...",
+                        reassessment_count + 1,
+                        int(plateau_time),
+                        coverage_increase_rate * 100,
+                        reassessment_coverage_rate * 100,
+                    )
+                    self._run_reassessment(stats, reassessment_count + 1, int(plateau_time))
+                    reassessment_count += 1
+                    last_reassessment_coverage = current_coverage
+                else:
+                    logger.info(
+                        "[Fuzzing] Reassessment skipped: coverage increase %.2f%% >= %.2f%% over %ds",
+                        coverage_increase_rate * 100,
+                        reassessment_coverage_rate * 100,
+                        int(plateau_time),
+                    )
+                coverage_window_start_time = now
+                coverage_window_start_count = current_coverage
 
         self.afl.stop()
         self._fetch_inference_metrics()
+
+    @staticmethod
+    def _normalize_rate(value) -> float:
+        """Return a fractional rate, accepting either 0.05 or 5 for five percent."""
+        rate = float(value)
+        if rate > 1.0:
+            rate /= 100.0
+        return max(rate, 0.0)
+
+    @staticmethod
+    def _coverage_increase_rate(previous: int, current: int) -> float:
+        """Return relative coverage growth for a reassessment window."""
+        if previous <= 0:
+            return 1.0 if current > 0 else 0.0
+        return max(current - previous, 0) / previous
 
     def _fetch_inference_metrics(self):
         """Call GET /metrics on the self-hosted inference server and log the result."""

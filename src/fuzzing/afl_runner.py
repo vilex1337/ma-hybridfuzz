@@ -162,12 +162,14 @@ class AFLRunner:
 
     def _read_stats_file(self) -> dict | None:
         if not self._output_dir:
+            logger.debug("Cannot find: %s", self._output_dir)
             return None
         stats_path = Path(self._output_dir) / "default" / "fuzzer_stats"
         if not stats_path.exists():
             # Try alternate path
             stats_path = Path(self._output_dir) / "fuzzer_stats"
         if not stats_path.exists():
+            logger.debug("Cannot find: %s", stats_path)
             return None
 
         stats = {}

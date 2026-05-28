@@ -47,6 +47,7 @@ scheduler:
 
 reassessment:
   plateau_threshold: 300  # Seconds without new coverage to trigger reassessment
+  reassessment_coverage_rate: 0.05  # Trigger if coverage grows by less than 5% over plateau_threshold
   max_reassessments: 5    # Max number of LLM reassessment rounds
 
 paths:
