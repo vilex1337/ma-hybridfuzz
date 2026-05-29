@@ -13,6 +13,7 @@ import logging
 import time
 from typing import Any
 
+from logging_utils import VERBOSE_LEVEL
 from llm.provider import create_provider
 
 logger = logging.getLogger("pre_phase.base_agent")
@@ -76,11 +77,20 @@ class LLMAgent:
         delay = 5
         for attempt in range(1, retries + 1):
             try:
-                return self.provider.generate(
+                response = self.provider.generate(
                     prompt=prompt,
                     max_tokens=self.max_tokens,
                     temperature=t,
                 )
+                logger.log(
+                    VERBOSE_LEVEL,
+                    "[LLM] Reasoning response: agent=%s model=%s chars=%d\n%s",
+                    type(self).__name__,
+                    self.model,
+                    len(response),
+                    response,
+                )
+                return response
             except Exception as exc:
                 # Only retry on transient conditions; surface permanent errors immediately.
                 msg = str(exc)

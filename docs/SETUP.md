@@ -189,6 +189,7 @@ based on functionality) using attention-distance neighbors.
 ```bash
 ./scripts/setup.sh                         # builds the Docker image
 ./scripts/run.sh configs/default.yml       # runs the full pipeline
+./scripts/run.sh configs/default.yml --verbosity 2  # include important internals
 ```
 
 ### Option B — Local (need AFL++ installed)
@@ -197,6 +198,14 @@ based on functionality) using attention-distance neighbors.
 source .venv/bin/activate
 mkdir -p workspace/{corpus,crashes,mutators,distance_cache,coverage,logs,memory}
 PYTHONPATH=src python3 src/orchestrator.py -c configs/default.yml
+PYTHONPATH=src python3 src/orchestrator.py -c configs/default.yml --verbosity 2  # include important internals
+```
+
+Logging verbosity can also be configured in YAML:
+
+```yaml
+logging:
+  verbosity: 1  # 0=warnings, 1=high-level, 2=important internals, 3=debug
 ```
 
 ### What happens in the run

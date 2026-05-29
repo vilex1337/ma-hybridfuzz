@@ -11,47 +11,46 @@ from pathlib import Path
 
 import yaml
 
+from logging_utils import VERBOSE_LEVEL, configure_logging
 from pre_phase.reasoning_agent import ReasoningAgent
 from pre_phase.reassessment_agent import ReassessmentAgent
 from pre_phase.persistent_memory import PersistentMemory
 from pre_phase.seed_generator import SeedGenerator
 from pre_phase.mutator_generator import MutatorGenerator
-from pre_phase.attention_computer import AttentionComputer
+from pre_phase.attention_distance_computer import AttentionDistanceComputer
 from pre_phase.call_chain_extractor import CallChainExtractor
 from pre_phase.coverage_checker import CoverageChecker
 from fuzzing.afl_runner import AFLRunner
 from fuzzing.scheduler import AttentionScheduler
 
-# Console-only handler at module level; a file handler is added in
-# Orchestrator.__init__ once the config (and its log path) is known.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    handlers=[logging.StreamHandler()],
-)
 logger = logging.getLogger("orchestrator")
 
 
 class Orchestrator:
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, verbosity: int | None = None):
         with open(config_path) as f:
             self.config = yaml.safe_load(f)
 
-        # Add file handler now that the config log path is available.
+        configured_verbosity = self.config.get("logging", {}).get("verbosity", 1)
+        self.verbosity = configured_verbosity if verbosity is None else verbosity
+
+        # Configure console and file logging now that the config log path is available.
         log_dir = Path(self.config["paths"]["logs"])
-        log_dir.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_dir / "orchestrator.log")
-        file_handler.setFormatter(
-            logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+        configure_logging(self.verbosity, log_dir / "orchestrator.log")
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Logging] verbosity=%d level=%s log_file=%s",
+            self.verbosity,
+            logging.getLevelName(logging.getLogger().level),
+            log_dir / "orchestrator.log",
         )
-        logging.getLogger().addHandler(file_handler)
 
         self.reasoning = ReasoningAgent(self.config)
         self.reassessment = ReassessmentAgent(self.config)
         self.memory = PersistentMemory(self.config)
         self.seed_gen = SeedGenerator(self.config)
         self.mutator_gen = MutatorGenerator(self.config)
-        self.attention = AttentionComputer(self.config)
+        self.attention = AttentionDistanceComputer(self.config)
         self.call_chain = CallChainExtractor(self.config)
         self.coverage_checker = CoverageChecker(self.config)
         self.afl = AFLRunner(self.config)
@@ -73,6 +72,16 @@ class Orchestrator:
         logger.info("=== MA-HybridFuzz Starting ===")
         logger.info("Target: %s", self.config["target"]["binary"])
         logger.info("Target function: %s", self.config["target"]["target_function"])
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Init] Components ready: reasoning=%s reassessment=%s memory=%s attention=%s afl=%s scheduler=%s",
+            type(self.reasoning).__name__,
+            type(self.reassessment).__name__,
+            type(self.memory).__name__,
+            type(self.attention).__name__,
+            type(self.afl).__name__,
+            type(self.scheduler).__name__,
+        )
 
         # Phase 1: Pre-phase (Gap 3 - LLM-based)
         logger.info("--- Phase 1: Pre-phase (LLM) ---")
@@ -91,6 +100,14 @@ class Orchestrator:
         bug_report = self.config["target"].get("bug_report", "")
         program_usage = self.config["target"].get("program_usage", "")
         bug_type = self.config["target"]["bug_type"]
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Pre-phase] Inputs: source_dir=%s bug_type=%s bug_report_chars=%d program_usage_chars=%d",
+            source_dir,
+            bug_type,
+            len(bug_report),
+            len(program_usage),
+        )
 
         # ── FCC: Function Call Chain ──────────────────────────────────────────
         # Resolution order (first match wins):
@@ -117,9 +134,8 @@ class Orchestrator:
                     " -> ".join(fcc),
                 )
             else:
-                compile_commands_dir = self.config["target"].get("compile_commands_dir")
                 logger.info(
-                    "[Pre-phase FCC] No cached FCC — extracting from Clang AST "
+                    "[Pre-phase FCC] No cached FCC — extracting from LLVM IR "
                     "(source_dir=%s, target=%s)...",
                     source_dir,
                     target_function,
@@ -127,7 +143,6 @@ class Orchestrator:
                 fcc = self.call_chain.extract(
                     source_dir=source_dir,
                     target_function=target_function,
-                    compile_commands_dir=compile_commands_dir,
                 )
                 if fcc:
                     logger.info(
@@ -157,6 +172,13 @@ class Orchestrator:
         # This is separate from the AFL++ fuzzing binary.
         binary = self.config["target"].get("binary", "")
         build_dir = self.config["target"].get("build_dir", source_dir)
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Pre-phase Coverage] Build inputs: build_dir=%s reference_binary=%s coverage_dir=%s",
+            build_dir,
+            binary,
+            self.config["paths"].get("coverage"),
+        )
         logger.info("[Pre-phase Coverage] Building coverage-instrumented binary...")
         cov_ok = self.coverage_checker.build(
             source_dir=build_dir,
@@ -175,6 +197,14 @@ class Orchestrator:
         # fuzzing loop starts.  Doing it in pre-phase keeps _run_fuzzing_loop
         # free of slow compilation and makes both binary builds visible together.
         logger.info("[Pre-phase AFL++] Instrumenting target binary...")
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Pre-phase AFL++] Instrumentation inputs: build_dir=%s binary=%s use_asan=%s use_ubsan=%s",
+            self.config["target"].get("build_dir", self.config["target"]["source_dir"]),
+            self.config["target"]["binary"],
+            self.config["fuzzer"].get("use_asan"),
+            self.config["fuzzer"].get("use_ubsan"),
+        )
         try:
             self._instrumented_binary = self.afl.instrument(
                 binary=self.config["target"]["binary"],
@@ -310,6 +340,18 @@ class Orchestrator:
             )
 
             # Materialise all generated seeds to the corpus directory
+            logger.log(
+                VERBOSE_LEVEL,
+                "[Pre-phase Opt] Generated seed candidates: %s",
+                [
+                    {
+                        "type": seed.get("seed_type", "string"),
+                        "format": seed.get("input_format", input_format),
+                        "description": (seed.get("seed_description") or seed.get("description") or "")[:80],
+                    }
+                    for seed in reachable_seeds
+                ],
+            )
             logger.info("[Pre-phase Opt] Writing %d reachable seeds to corpus...", len(reachable_seeds))
             written = self.seed_gen.write_seeds(reachable_seeds)
             logger.info("[Pre-phase Opt] Wrote %d seeds", len(written))
@@ -528,6 +570,8 @@ class Orchestrator:
             "[Pre-phase Opt] No fastest path — reasoning from neighbour functions"
         )
         seeds = list(existing_seeds)
+        if not self.config.get("attention", {}).get("enabled", True):
+            return seeds
         neighbor_names = self.attention.get_neighbors(target_function, top_k=3)
         for neighbor_name in neighbor_names:
             neighbor_src = self._load_function_source(source_dir, neighbor_name)
@@ -720,9 +764,27 @@ class Orchestrator:
         if self._instrumented_binary is None:
             raise RuntimeError("Instrumented binary not built — pre-phase must run first")
         instrumented = self._instrumented_binary
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Fuzzing] Initializing loop: instrumented=%s corpus=%s crashes=%s mutators=%s timeout=%ss",
+            instrumented,
+            self.config["paths"]["corpus"],
+            self.config["paths"]["crashes"],
+            self.config["paths"]["mutators"],
+            self.config["fuzzer"]["timeout"],
+        )
 
         # Load pre-computed data
-        distance_matrix = self.attention.load_cached()
+        distance_matrix = {}
+        if self.config.get("attention", {}).get("enabled", True):
+            distance_matrix = self.attention.load_cached()
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Fuzzing] Distance cache loaded: functions=%d target=%s has_matrix=%s",
+            len(distance_matrix.get("functions", [])) if distance_matrix else 0,
+            distance_matrix.get("target", "") if distance_matrix else "",
+            bool(distance_matrix.get("matrix")) if distance_matrix else False,
+        )
         self.scheduler.set_distance_matrix(distance_matrix)
 
         # Start AFL++ with custom scheduler and mutators
@@ -737,13 +799,24 @@ class Orchestrator:
 
         # Monitor loop
         timeout = self.config["fuzzer"]["timeout"]
-        plateau_threshold = self.config["reassessment"]["plateau_threshold"]
-        max_reassessments = self.config["reassessment"]["max_reassessments"]
+        reassessment_cfg = self.config.get("reassessment", {})
+        plateau_threshold = reassessment_cfg.get("plateau_threshold", 300)
+        max_reassessments = reassessment_cfg.get("max_reassessments", 5)
+        reassessment_coverage_rate = self._normalize_rate(
+            reassessment_cfg.get("reassessment_coverage_rate", 0.05)
+        )
         reassessment_count = 0
         last_reassessment_coverage = 0   # coverage at the time of last reassessment
-        last_new_coverage_time = time.time()
-        last_coverage_count = 0
+        coverage_window_start_time = time.time()
+        coverage_window_start_count = 0
         start_time = time.time()
+        logger.log(
+            VERBOSE_LEVEL,
+            "[Fuzzing] Reassessment policy: plateau_threshold=%ss coverage_rate=%.4f max_reassessments=%d",
+            plateau_threshold,
+            reassessment_coverage_rate,
+            max_reassessments,
+        )
         while self._running and (time.time() - start_time) < timeout:
             time.sleep(10)
             stats = self.afl.get_stats()
@@ -752,10 +825,6 @@ class Orchestrator:
 
             current_coverage = stats.get("paths_total", 0)
             crashes = stats.get("unique_crashes", 0)
-
-            if current_coverage > last_coverage_count:
-                last_coverage_count = current_coverage
-                last_new_coverage_time = time.time()
 
             elapsed = time.time() - start_time
             logger.info(
@@ -779,20 +848,61 @@ class Orchestrator:
                 last_reassessment_coverage = current_coverage
 
             # ── Phase 3: On-Demand Reassessment ──────────────────────────────
-            plateau_time = time.time() - last_new_coverage_time
-            if plateau_time > plateau_threshold and reassessment_count < max_reassessments:
-                logger.info(
-                    "[Reassessment #%d] Plateau detected (%ds). Activating LLM...",
-                    reassessment_count + 1,
-                    int(plateau_time),
-                )
-                self._run_reassessment(stats, reassessment_count + 1, int(plateau_time))
-                reassessment_count += 1
-                last_reassessment_coverage = current_coverage
-                last_new_coverage_time = time.time()
+            now = time.time()
+            plateau_time = now - coverage_window_start_time
+            coverage_increase_rate = self._coverage_increase_rate(
+                coverage_window_start_count,
+                current_coverage,
+            )
+            logger.log(
+                VERBOSE_LEVEL,
+                "[Fuzzing] Plateau window: elapsed=%ds start_coverage=%d current_coverage=%d increase=%.2f%%",
+                int(plateau_time),
+                coverage_window_start_count,
+                current_coverage,
+                coverage_increase_rate * 100,
+            )
+            if plateau_time >= plateau_threshold:
+                if (
+                    coverage_increase_rate < reassessment_coverage_rate
+                ):
+                    logger.info(
+                        "[Reassessment #%d] Plateau detected (%ds, coverage increase %.2f%% < %.2f%%). Activating LLM...",
+                        reassessment_count + 1,
+                        int(plateau_time),
+                        coverage_increase_rate * 100,
+                        reassessment_coverage_rate * 100,
+                    )
+                    self._run_reassessment(stats, reassessment_count + 1, int(plateau_time))
+                    reassessment_count += 1
+                    last_reassessment_coverage = current_coverage
+                else:
+                    logger.info(
+                        "[Fuzzing] Reassessment skipped: coverage increase %.2f%% >= %.2f%% over %ds",
+                        coverage_increase_rate * 100,
+                        reassessment_coverage_rate * 100,
+                        int(plateau_time),
+                    )
+                coverage_window_start_time = now
+                coverage_window_start_count = current_coverage
 
         self.afl.stop()
         self._fetch_inference_metrics()
+
+    @staticmethod
+    def _normalize_rate(value) -> float:
+        """Return a fractional rate, accepting either 0.05 or 5 for five percent."""
+        rate = float(value)
+        if rate > 1.0:
+            rate /= 100.0
+        return max(rate, 0.0)
+
+    @staticmethod
+    def _coverage_increase_rate(previous: int, current: int) -> float:
+        """Return relative coverage growth for a reassessment window."""
+        if previous <= 0:
+            return 1.0 if current > 0 else 0.0
+        return max(current - previous, 0) / previous
 
     def _fetch_inference_metrics(self):
         """Call GET /metrics on the self-hosted inference server and log the result."""
@@ -973,21 +1083,36 @@ class Orchestrator:
         )
 
     def _report_results(self):
-        crashes_dir = Path(self.config["paths"]["crashes"])
+        output_dir = Path(self.config["paths"]["crashes"])
         # AFL++ writes crashes under <out>/default/crashes/id:* (when launched
         # with default fuzzer ID) or <out>/<name>/crashes/id:* for named runs.
         # Fall back to a recursive glob so we count crashes regardless of layout.
         crash_files = (
-            list(crashes_dir.rglob("crashes/id:*")) if crashes_dir.exists() else []
+            list(output_dir.rglob("crashes/id:*")) if output_dir.exists() else []
         )
+        queue_files = (
+            list(output_dir.rglob("queue/id:*")) if output_dir.exists() else []
+        )
+        crash_dirs = [
+            path for path in output_dir.rglob("crashes")
+            if path.is_dir()
+        ] if output_dir.exists() else []
         logger.info("=== Results ===")
         logger.info("Total crashes found: %d", len(crash_files))
         if crash_files:
             for f in crash_files[:10]:
-                logger.info("  - %s", f.relative_to(crashes_dir))
+                logger.info("  - %s", f.relative_to(output_dir))
             if len(crash_files) > 10:
                 logger.info("  ... and %d more", len(crash_files) - 10)
-        logger.info("Crashes directory: %s", crashes_dir)
+        logger.info("AFL++ output directory: %s", output_dir)
+        logger.info("AFL++ queue entries: %d", len(queue_files))
+        if crash_dirs:
+            logger.info(
+                "Crash testcase directory: %s",
+                crash_dirs[0],
+            )
+        else:
+            logger.info("Crash testcase directory: %s", output_dir / "default" / "crashes")
         logger.info("Logs: %s", self.config["paths"]["logs"])
 
 
@@ -998,9 +1123,27 @@ def main():
         default="/opt/mahybridfuzz/configs/default.yml",
         help="Path to config file",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Increase log verbosity. Use -vv for verbosity level 2.",
+    )
+    parser.add_argument(
+        "--verbosity",
+        type=int,
+        choices=(0, 1, 2, 3),
+        default=None,
+        help="Set log verbosity: 0=warnings, 1=high-level info, 2=important internals, 3=debug.",
+    )
     args = parser.parse_args()
 
-    orchestrator = Orchestrator(args.config)
+    verbosity = args.verbosity
+    if verbosity is None and args.verbose:
+        verbosity = min(args.verbose, 3)
+
+    orchestrator = Orchestrator(args.config, verbosity=verbosity)
     orchestrator.run()
 
 

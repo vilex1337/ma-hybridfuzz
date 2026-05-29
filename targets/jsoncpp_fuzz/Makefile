@@ -4,9 +4,40 @@ JSONCPP_SRC := /targets/jsoncpp
 _CXX_SLUG   := $(shell printf '%s' '$(CXX)' | tr '+/ @' '____')
 BUILD_DIR   := $(JSONCPP_SRC)/cmake_build_$(_CXX_SLUG)
 
-.PHONY: all clean jsoncpp_fuzzer
+.PHONY: all clean jsoncpp_fuzzer ir clean-ir
+
+.PHONY: ast_dump
 
 all: jsoncpp_fuzzer
+
+ast_dump:
+	clang -Xclang -ast-dump -fsyntax-only \
+	    -I$(JSONCPP_SRC)/include \
+	    -I$(JSONCPP_SRC)/src/test_lib_json \
+	    $(JSONCPP_SRC)/src/test_lib_json/fuzz.cpp
+
+IR_DIR ?= $(CURDIR)/ir
+IR_CXX ?= $(CXX)
+IR_SOURCES := \
+    $(JSONCPP_SRC)/src/lib_json/json_reader.cpp \
+    $(JSONCPP_SRC)/src/lib_json/json_value.cpp \
+    $(JSONCPP_SRC)/src/lib_json/json_writer.cpp \
+    $(JSONCPP_SRC)/src/test_lib_json/fuzz.cpp \
+    $(CURDIR)/main_stub.cpp
+
+ir:
+	mkdir -p $(IR_DIR)
+	@set -e; \
+	for src in $(IR_SOURCES); do \
+	    base=$$(basename "$$src"); \
+	    out="$(IR_DIR)/$${base%.*}.ll"; \
+	    echo "[ir] $$src -> $$out"; \
+	    $(IR_CXX) $(CXXFLAGS) -S -emit-llvm -g -O0 -w \
+	        -I$(JSONCPP_SRC)/include \
+	        -I$(JSONCPP_SRC)/src/lib_json \
+	        -I$(JSONCPP_SRC)/src/test_lib_json \
+	        -o "$$out" "$$src"; \
+	done
 
 # Always recompile so each invocation uses the current CXX/CXXFLAGS.
 # main_stub.cpp provides a plain file-reading main() — avoids the
@@ -39,3 +70,6 @@ $(BUILD_DIR)/lib/libjsoncpp.a:
 
 clean:
 	rm -rf $(JSONCPP_SRC)/cmake_build_* jsoncpp_fuzzer
+
+clean-ir:
+	rm -rf $(IR_DIR)

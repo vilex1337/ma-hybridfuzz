@@ -1,7 +1,8 @@
 #!/bin/bash
 # Run MA-HybridFuzz against the jsoncpp_jsoncpp_fuzzer target.
-# Usage: ./scripts/run_jsoncpp.sh [--build]
+# Usage: ./scripts/run_jsoncpp.sh [--build] [orchestrator_args...]
 #   --build   rebuild the Docker image before running (useful after code changes)
+# Example: ./scripts/run_jsoncpp.sh --verbosity 2
 
 set -e
 
@@ -18,10 +19,11 @@ if [ -f .env ]; then
     set +a
 fi
 
-if [ "$1" = "--build" ]; then
+if [ "${1:-}" = "--build" ]; then
     echo "[jsoncpp] Building Docker image..."
     docker compose build jsoncpp
+    shift
 fi
 
 echo "[jsoncpp] Starting MA-HybridFuzz (target: jsoncpp_jsoncpp_fuzzer)..."
-docker compose run --rm jsoncpp
+docker compose run --rm jsoncpp python3 /opt/mahybridfuzz/src/orchestrator.py -c configs/jsoncpp.yml "$@"

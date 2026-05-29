@@ -181,8 +181,10 @@ class ReassessmentAgent(LLMAgent):
             ),
         )
 
+        llm_response = ""
         try:
-            result = self._parse_json(self._query_llm(prompt))
+            llm_response = self._query_llm(prompt)
+            result = self._parse_json(llm_response)
             logger.info(
                 "[Reassessment] Diagnosis: type=%s deviation=%s→%s confidence=%.2f — %s",
                 result.get("stuck_type", "?"),
@@ -193,7 +195,7 @@ class ReassessmentAgent(LLMAgent):
             )
             return result
         except (json.JSONDecodeError, KeyError) as e:
-            logger.error("Failed to parse diagnosis: %s", e)
+            logger.error("Failed to parse diagnosis: %s. LLM response: %s", e, llm_response)
             return {
                 "stuck_type": "unknown",
                 "cause": "Could not determine cause",
@@ -348,8 +350,10 @@ class ReassessmentAgent(LLMAgent):
             ),
         )
 
+        llm_response = ""
         try:
-            result = self._parse_json(self._query_llm(prompt, temperature=0.4))
+            llm_response = self._query_llm(prompt, temperature=0.4)
+            result = self._parse_json(llm_response)
             n_seeds = len(result.get("new_seeds", []))
             logger.info(
                 "[Reassessment] Recovery plan: %d new seeds, focus: %s",
@@ -366,7 +370,7 @@ class ReassessmentAgent(LLMAgent):
             }
             return result
         except (json.JSONDecodeError, KeyError) as e:
-            logger.error("Failed to parse recovery plan: %s", e)
+            logger.error("Failed to parse recovery plan: %s. LLM response: %s", e, llm_response)
             return {
                 "rationale": "Fallback: diversify seeds",
                 "new_seeds": [],

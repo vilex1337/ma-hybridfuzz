@@ -48,6 +48,9 @@ echo "GEMINI_API_KEY=AIza..." >> .env
 
 # 4. Run the full pipeline
 ./scripts/run.sh configs/default.yml
+
+# Optional: include important internal service/computation logs
+./scripts/run.sh configs/default.yml --verbosity 2
 ```
 
 For the full walkthrough (including OpenAI/Anthropic, Docker, troubleshooting,
@@ -83,6 +86,9 @@ llm:
   model: "gemini-2.5-flash"
   max_tokens: 4096
   temperature: 0.3
+
+logging:
+  verbosity: 1   # 0=warnings, 1=high-level, 2=important internals, 3=debug
 ```
 
 ## Project Structure

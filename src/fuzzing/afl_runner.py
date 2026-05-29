@@ -8,6 +8,8 @@ import signal
 import subprocess
 from pathlib import Path
 
+from logging_utils import VERBOSE_LEVEL
+
 logger = logging.getLogger("fuzzing.afl_runner")
 
 
@@ -29,6 +31,14 @@ class AFLRunner:
         }
         if self.config["fuzzer"].get("use_ubsan"):
             afl_env["AFL_USE_UBSAN"] = "1"
+        logger.log(
+            VERBOSE_LEVEL,
+            "[AFLRunner] Instrumentation requested: binary=%s source_dir=%s output=%s env=%s",
+            binary,
+            source_dir,
+            instrumented_path,
+            afl_env,
+        )
 
         ok = build_binary(
             source_dir,
@@ -54,6 +64,15 @@ class AFLRunner:
     ):
         """Start AFL++ fuzzing session."""
         self._output_dir = crashes_dir
+        logger.log(
+            VERBOSE_LEVEL,
+            "[AFLRunner] Initializing fuzzer: binary=%s corpus=%s output=%s mutator_dir=%s scheduler=%s",
+            instrumented_binary,
+            corpus_dir,
+            crashes_dir,
+            mutator_dir,
+            type(scheduler).__name__ if scheduler else None,
+        )
 
         # Environment variables AFL++ needs in containerised / restricted
         # environments. Without these the fuzzer prints a warning and exits
@@ -84,17 +103,36 @@ class AFLRunner:
             env["AFL_CUSTOM_MUTATOR_LIBRARY"] = ";".join(str(f) for f in mutator_files)
             logger.info("Using custom mutator libraries: %s", [f.name for f in mutator_files])
 
+        # Pass AFLGo-format distance file if available (written by AttentionDistanceComputer)
+        dist_cfg = Path(self.config["paths"]["distance_cache"]) / "distance.cfg.txt"
+        if dist_cfg.exists():
+            env["AFL_LLVM_AFLGO_INST_RATIO"] = "100"
+            env["AFL_CUSTOM_INFO_OUT"] = str(dist_cfg)
+            logger.info("Using attention distance file: %s", dist_cfg)
+
         # Power schedule - use attention-guided if scheduler available
         if scheduler and scheduler.has_distance_matrix():
             cmd.extend(["-p", "exploit"])
-            # Write distance file for AFL++ if supported
             distance_file = scheduler.export_afl_distance_file()
             if distance_file:
                 env["AFL_DISTANCE_FILE"] = distance_file
+            logger.log(
+                VERBOSE_LEVEL,
+                "[AFLRunner] Scheduler mode: attention-guided distance_file=%s",
+                distance_file,
+            )
         else:
             cmd.extend(["-p", "fast"])
+            logger.log(VERBOSE_LEVEL, "[AFLRunner] Scheduler mode: AFL fast")
 
         cmd.extend(["--", instrumented_binary, "@@"])
+        logger.log(
+            VERBOSE_LEVEL,
+            "[AFLRunner] AFL environment: AFL_CUSTOM_MUTATOR_LIBRARY=%s AFL_DISTANCE_FILE=%s ASAN_OPTIONS=%s",
+            env.get("AFL_CUSTOM_MUTATOR_LIBRARY", ""),
+            env.get("AFL_DISTANCE_FILE", ""),
+            env.get("ASAN_OPTIONS", ""),
+        )
 
         # Stream AFL++ stdout+stderr to a log file so we can see why it
         # died (e.g. bad core_pattern, calibration failure, bad instrumentation).
@@ -137,6 +175,7 @@ class AFLRunner:
             logger.info("AFL++ stopped (rc=%d)", self._process.returncode)
         if getattr(self, "_afl_log", None):
             self._afl_log.close()
+        self._make_output_readable()
 
     def get_stats(self) -> dict | None:
         """Read AFL++ fuzzer_stats file."""
@@ -156,12 +195,14 @@ class AFLRunner:
 
     def _read_stats_file(self) -> dict | None:
         if not self._output_dir:
+            logger.debug("Cannot find: %s", self._output_dir)
             return None
         stats_path = Path(self._output_dir) / "default" / "fuzzer_stats"
         if not stats_path.exists():
             # Try alternate path
             stats_path = Path(self._output_dir) / "fuzzer_stats"
         if not stats_path.exists():
+            logger.debug("Cannot find: %s", stats_path)
             return None
 
         stats = {}
@@ -183,3 +224,24 @@ class AFLRunner:
                     pass
 
         return stats
+
+    def _make_output_readable(self) -> None:
+        """Relax AFL++ output permissions so bind-mounted workspaces are inspectable."""
+        if not self._output_dir:
+            return
+        output_dir = Path(self._output_dir)
+        if not output_dir.exists():
+            return
+        try:
+            for path in output_dir.rglob("*"):
+                try:
+                    if path.is_dir():
+                        path.chmod(0o755)
+                    else:
+                        path.chmod(0o644)
+                except OSError:
+                    logger.debug("Could not chmod AFL output path: %s", path)
+            output_dir.chmod(0o755)
+            logger.info("AFL++ output made host-readable: %s", output_dir)
+        except OSError as exc:
+            logger.warning("Could not make AFL++ output host-readable: %s", exc)
