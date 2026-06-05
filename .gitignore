@@ -21,7 +21,6 @@ credentials/
 # Log files (may embed prompts or env values at debug level)
 *.log
 **/*.log
-
 # IDE / AI assistant caches
 .ipynb_checkpoints/
 
@@ -47,7 +46,7 @@ workspace/coverage/*
 workspace/logs/*
 workspace/instrumented/*
 workspace/memory/*
-!workspace/*/.gitkeep
+
 
 # Python
 __pycache__/
