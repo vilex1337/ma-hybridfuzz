@@ -1,15 +1,26 @@
 # Phương pháp benchmark:
 ## Các metric cần đo:
-Nhóm metric về chuẩn bị
-- Thời gian chuẩn bị (overhead)
-Nhóm metric về tính năng:
-- Time-to-reach/1 đơn vị thời gian 
-- Time-to-exposure/1 đơn vị thời gian 
-- Số lượng crash
-Nhóm metric về chi phí:
-- Input token
-- Output token
-- Số lần gọi request cho mỗi agent
+*Preparation Overhead:*
+- Static analysis + CG construction time
+- Pre-phase LLM seed/mutator generation time
+- Total preparation time
+
+*Effectiveness:*
+- Time-to-Reach (TTR): time to reach target location
+- Time-to-Exposure (TTE): time to trigger vulnerability/PoV
+- #Unique PoVs / Crashes triggered
+- Target edge coverage & island coverage
+
+*Efficiency & Cost:*
+- Executions per second (exec/s) & overhead (%)
+- Ineffective mutation rate
+- Token usage (input/output) & #LLM requests
+- Median/Mean TTR & TTE với standard deviation
+
+*Benchmark Setting:*
+- Magma (full hoặc subset 20-30 CVEs đại diện)
+- 12h × 4 runs (hoặc 6h × 5 runs) với note resource limit)
+- Baselines: AFLGo, DynamicFuzz (re-impl), Attention-AFLGo, IDFuzz, PBFuzz
 
 ## Benchmark - Magma
 Benchmark Magma được chọn làm benchmark để đo vì: 
