@@ -38,8 +38,15 @@ class AttentionDistanceComputer:
         self.cache_dir = Path(config["paths"]["distance_cache"])
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        server_url = config.get("attention_distance", {}).get("server_url", "")
-        self._scorer = LineVulScorer(server_url)
+        attention_cfg = config.get("attention_distance", {})
+        server_url = attention_cfg.get("server_url", "")
+        sid = (
+            config.get("inference_session_id")
+            or attention_cfg.get("sid")
+            or config.get("llm", {}).get("sid")
+            or "default"
+        )
+        self._scorer = LineVulScorer(server_url, sid=sid)
         self._extractor = CFGExtractor(config)
 
         # State loaded by load_cached() or set by compute()

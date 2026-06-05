@@ -41,8 +41,13 @@ Notebook: `inference/linevul_attention_distance_server.ipynb`
 | `/score_blocks` | POST | Returns normalized attention scores `w(m) ∈ [0, 0.5]` per basic block |
 | `/compute_distances` | POST | Returns `db_att = db_phys × (1.5 - w(m))` given blocks + physical distances |
 | `/health` | GET | Model status and device info |
-| `/metrics` | GET | Cumulative blocks scored / requests |
+| `/metrics/<sid>` | GET | Cumulative blocks scored / requests for one fuzzer session |
+| `/metrics` | GET | All fuzzer sessions plus aggregate totals |
 | `/docs` | GET | Auto-generated FastAPI docs |
+
+Both inference servers accept an optional `sid` field in request JSON. MA-HybridFuzz
+generates a per-process session id automatically, or you can set `session.id` in
+config / `MA_HYBRIDFUZZ_SID` to force a known id.
 
 **Port:** 8001 (avoids conflict with Qwen server on 8000 if running both on same session)
 

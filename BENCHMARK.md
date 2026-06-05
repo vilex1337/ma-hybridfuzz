@@ -31,12 +31,12 @@ Benchmark Magma được chọn làm benchmark để đo vì:
 ## Phương pháp
 Vì Hosting LLM inference trên kaggle giới hạn 30 tiếng, để tiết kiệm chi phí, nhóm chúng em fuzz 6 tiếng cho mỗi target, mỗi target fuzz 2 lần.
 ### Các thí nghiệm:
-1. Đo overhead cho 7 target của Magma
-2. Thực hiện fuzz 6 tiếng cho mỗi target của Magma, mỗi target fuzz 2 lần, đo các metric về tính năng và chi phí
+All followed benchmark setting
+1. Đo overhead 
+2. Full pipeline
 3. Ablation study: lần lượt cắt bỏ các thành phần: 
   - Prephase seed
   - Prephase mutator
   - Attention distance agent
   - Reassessment
 
-Với thời gian đo và phương pháp đo tương tự: thực hiện fuzz 6 tiếng cho mỗi target của Magma, mỗi target fuzz 2 lần, đo các metric về tính năng và chi phí

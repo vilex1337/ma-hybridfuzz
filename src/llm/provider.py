@@ -112,6 +112,17 @@ def create_provider(config: dict) -> LLMProvider:
         base_url = llm_config.get("base_url") or os.getenv("SELF_HOSTED_BASE_URL", "")
         use_chat = llm_config.get("use_chat", True)
         timeout = int(llm_config.get("timeout", 300))
-        return SelfHostedProvider(model=model, base_url=base_url, use_chat=use_chat, timeout=timeout)
+        sid = (
+            config.get("inference_session_id")
+            or llm_config.get("sid")
+            or os.getenv("MA_HYBRIDFUZZ_SID", "default")
+        )
+        return SelfHostedProvider(
+            model=model,
+            base_url=base_url,
+            use_chat=use_chat,
+            timeout=timeout,
+            sid=sid,
+        )
 
     raise ValueError(f"Unhandled provider: {provider_name}")
