@@ -7,6 +7,11 @@ logging:
   # 3 = full debug logs
   verbosity: 1
 
+session:
+  # Optional inference metrics session id. If empty, MA-HybridFuzz generates one
+  # per fuzzer process. Can also be overridden with MA_HYBRIDFUZZ_SID.
+  id: ""
+
 target:
   binary: ""           # Path to target binary (inside container)
   source_dir: ""       # Path to target source code

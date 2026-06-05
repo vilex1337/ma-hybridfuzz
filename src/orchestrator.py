@@ -5,6 +5,8 @@ Coordinates the full pipeline: Pre-phase -> Fuzzing Loop -> On-demand Reassessme
 
 import argparse
 import logging
+import os
+import re
 import signal
 import time
 from pathlib import Path
@@ -30,6 +32,10 @@ class Orchestrator:
     def __init__(self, config_path: str, verbosity: int | None = None):
         with open(config_path) as f:
             self.config = yaml.safe_load(f)
+
+        self.session_id = self._resolve_session_id(config_path)
+        self.config["inference_session_id"] = self.session_id
+        self.config.setdefault("session", {})["id"] = self.session_id
 
         configured_verbosity = self.config.get("logging", {}).get("verbosity", 1)
         self.verbosity = configured_verbosity if verbosity is None else verbosity
@@ -68,8 +74,33 @@ class Orchestrator:
         logger.info("Received signal %d, shutting down...", signum)
         self._running = False
 
+    def _resolve_session_id(self, config_path: str) -> str:
+        session_cfg = self.config.get("session", {})
+        llm_cfg = self.config.get("llm", {})
+        attention_cfg = self.config.get("attention_distance", {})
+        configured = (
+            session_cfg.get("id")
+            or llm_cfg.get("sid")
+            or attention_cfg.get("sid")
+            or os.getenv("MA_HYBRIDFUZZ_SID")
+        )
+        if configured:
+            raw_sid = str(configured)
+        else:
+            target_cfg = self.config.get("target", {})
+            target_name = (
+                target_cfg.get("target_function")
+                or Path(str(target_cfg.get("binary", ""))).stem
+                or "target"
+            )
+            raw_sid = f"{Path(config_path).stem}-{target_name}-{os.getpid()}-{int(time.time())}"
+
+        sid = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_sid).strip("._-")
+        return sid or "default"
+
     def run(self):
         logger.info("=== MA-HybridFuzz Starting ===")
+        logger.info("Inference session: %s", self.session_id)
         logger.info("Target: %s", self.config["target"]["binary"])
         logger.info("Target function: %s", self.config["target"]["target_function"])
         logger.log(
@@ -905,20 +936,19 @@ class Orchestrator:
         return max(current - previous, 0) / previous
 
     def _fetch_inference_metrics(self):
-        """Call GET /metrics on the self-hosted inference server and log the result."""
+        """Call GET /metrics/<sid> on the self-hosted inference server and log the result."""
         llm_cfg = self.config.get("llm", {})
         if llm_cfg.get("provider", "").lower() != "self_hosted":
             return
-        import os
         import requests as _req
         base_url = (llm_cfg.get("base_url") or os.getenv("SELF_HOSTED_BASE_URL", "")).rstrip("/")
         if not base_url:
             return
         try:
-            resp = _req.get(f"{base_url}/metrics", timeout=10)
+            resp = _req.get(f"{base_url}/metrics/{self.session_id}", timeout=10)
             resp.raise_for_status()
             m = resp.json()
-            logger.info("=== Inference Metrics ===")
+            logger.info("=== Inference Metrics (%s) ===", self.session_id)
             logger.info("Requests made:       %s", m.get("requests", "N/A"))
             logger.info("Input tokens total:  %s", m.get("input_tokens", "N/A"))
             logger.info("Output tokens total: %s", m.get("output_tokens", "N/A"))

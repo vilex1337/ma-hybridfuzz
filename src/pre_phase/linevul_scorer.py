@@ -14,8 +14,9 @@ _TIMEOUT = 300  # seconds — scoring many blocks can take a while
 class LineVulScorer:
     """Client for the Kaggle-hosted LineVul inference server."""
 
-    def __init__(self, server_url: str):
+    def __init__(self, server_url: str, sid: str = "default"):
         self._url = server_url.rstrip("/") if server_url else ""
+        self._sid = sid or "default"
 
     def is_available(self) -> bool:
         if not self._url:
@@ -39,7 +40,7 @@ class LineVulScorer:
         try:
             resp = requests.post(
                 f"{self._url}/score_blocks",
-                json={"blocks": blocks},
+                json={"sid": self._sid, "blocks": blocks},
                 timeout=_TIMEOUT,
             )
             resp.raise_for_status()

@@ -32,7 +32,14 @@ _MAX_RETRIES = 4
 class SelfHostedProvider(LLMProvider):
     """Calls the FastAPI inference server defined in inference/*.ipynb."""
 
-    def __init__(self, model: str, base_url: str, use_chat: bool = True, timeout: int = _DEFAULT_TIMEOUT):
+    def __init__(
+        self,
+        model: str,
+        base_url: str,
+        use_chat: bool = True,
+        timeout: int = _DEFAULT_TIMEOUT,
+        sid: str = "default",
+    ):
         if not base_url:
             raise RuntimeError(
                 "Self-hosted provider requires a base_url. "
@@ -42,6 +49,7 @@ class SelfHostedProvider(LLMProvider):
         self.base_url = base_url.rstrip("/")
         self.use_chat = use_chat
         self.timeout = timeout
+        self.sid = sid or "default"
 
     def generate(
         self,
@@ -79,6 +87,7 @@ class SelfHostedProvider(LLMProvider):
 
     def _chat(self, prompt: str, max_tokens: int, temperature: float) -> str:
         payload = {
+            "sid": self.sid,
             "messages": [{"role": "user", "content": prompt}],
             "max_new_tokens": max_tokens,
             "temperature": temperature,
@@ -89,6 +98,7 @@ class SelfHostedProvider(LLMProvider):
 
     def _generate(self, prompt: str, max_tokens: int, temperature: float) -> str:
         payload = {
+            "sid": self.sid,
             "prompt": prompt,
             "max_new_tokens": max_tokens,
             "temperature": temperature,
