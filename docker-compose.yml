@@ -36,3 +36,129 @@ services:
     security_opt:
       - seccomp:unconfined
     command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/jsoncpp.yml"]
+
+  magma-libpng:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.libpng
+    volumes:
+      - ./workspace:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/libpng.yml"]
+
+  magma-libtiff:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.libtiff
+    volumes:
+      - ./workspace:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/libtiff.yml"]
+
+  magma-libxml2:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.libxml2
+    volumes:
+      - ./workspace:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/libxml2.yml"]
+
+  magma-openssl:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.openssl
+    volumes:
+      - ./workspace:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/openssl.yml"]
+
+  magma-sqlite3:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.sqlite3
+    volumes:
+      - ./workspace:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/sqlite3.yml"]
+
+  magma-poppler:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.poppler
+    volumes:
+      - ./workspace:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/poppler.yml"]
+
+  magma-php:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.php
+    volumes:
+      - ./workspace:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/php.yml"]

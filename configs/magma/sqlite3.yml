@@ -1,0 +1,63 @@
+# MA-HybridFuzz — magma/sqlite3_fuzz target
+
+logging:
+  verbosity: 1
+
+attention:
+  enabled: false
+
+target:
+  binary: "/targets/magma/sqlite3/sqlite3_fuzz"
+  source_dir: "/targets/sqlite3"
+  build_dir: "/targets/magma/sqlite3"
+  ir_build_dir: "/targets/magma/sqlite3"
+  target_function: "sqlite3_exec"
+  bug_type: "use_after_free"
+  args: ["@@"]
+  program_usage: |
+    SQLite3 is an embedded SQL database engine. The fuzzer feeds
+    arbitrary SQL statements to the engine via the OSS-Fuzz harness.
+    Interesting inputs: deeply nested SELECT statements, recursive CTEs,
+    triggers with complex logic, virtual table operations, ATTACH DATABASE
+    with unusual paths, and window function edge cases.
+
+llm:
+  provider: "self_hosted"
+  model: "qwen2.5-coder-14b"
+  base_url: "https://2add-35-253-68-239.ngrok-free.app/"
+  use_chat: true
+  max_tokens: 4096
+  temperature: 0.3
+  timeout: 600
+
+fuzzer:
+  engine: "afl++"
+  timeout: 21600
+  exec_timeout: 1000
+  memory_limit: 256
+  seed_count: 20
+  use_asan: true
+  use_ubsan: true
+  use_custom_mutator: false
+
+attention_distance:
+  server_url: "https://523c-8-229-92-43.ngrok-free.app/"
+
+scheduler:
+  attention_weight: 0.6
+  coverage_weight: 0.3
+  speed_weight: 0.1
+
+reassessment:
+  plateau_threshold: 300
+  reassessment_coverage_rate: 0.05
+  max_reassessments: 100
+
+paths:
+  corpus: "/workspace/corpus"
+  crashes: "/workspace/crashes"
+  mutators: "/workspace/mutators"
+  distance_cache: "/workspace/distance_cache"
+  coverage: "/workspace/coverage"
+  logs: "/workspace/logs"
+  memory: "/workspace/memory"

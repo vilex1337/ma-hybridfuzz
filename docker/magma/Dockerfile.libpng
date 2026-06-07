@@ -1,0 +1,34 @@
+FROM aflplusplus/aflplusplus:latest
+
+RUN apt-get update && apt-get install -y \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    zlib1g-dev \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+RUN git clone https://github.com/glennrp/libpng.git /targets/libpng && \
+    cd /targets/libpng && git checkout a37d4836519517bdce6cb9d956092321eca3e73b
+
+RUN mkdir -p /targets/magma/libpng
+COPY targets/magma/libpng/Makefile /targets/magma/libpng/Makefile
+COPY targets/magma/main_stub.cpp /targets/magma/libpng/main_stub.cpp
+
+RUN mkdir -p /workspace/{corpus,crashes,mutators,distance_cache,coverage,logs,memory,instrumented} \
+    && mkdir -p /opt/mahybridfuzz/src
+
+COPY src/ /opt/mahybridfuzz/src/
+COPY configs/ /opt/mahybridfuzz/configs/
+
+WORKDIR /opt/mahybridfuzz
+ENV PYTHONPATH=/opt/mahybridfuzz/src
+
+CMD ["python3", "src/orchestrator.py", "-c", "configs/magma/libpng.yml"]

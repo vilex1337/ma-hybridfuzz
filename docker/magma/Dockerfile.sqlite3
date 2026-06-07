@@ -1,0 +1,31 @@
+FROM aflplusplus/aflplusplus:latest
+
+RUN apt-get update && apt-get install -y \
+    tcl-dev \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Use the GitHub mirror of the SQLite fossil repo, pinned to the magma revision.
+RUN git clone https://github.com/sqlite/sqlite.git /targets/sqlite3 && \
+    cd /targets/sqlite3 && git checkout version-3.39.4
+
+RUN mkdir -p /targets/magma/sqlite3
+COPY targets/magma/sqlite3/Makefile /targets/magma/sqlite3/Makefile
+COPY targets/magma/main_stub.cpp /targets/magma/sqlite3/main_stub.cpp
+
+RUN mkdir -p /workspace/{corpus,crashes,mutators,distance_cache,coverage,logs,memory,instrumented} \
+    && mkdir -p /opt/mahybridfuzz/src
+
+COPY src/ /opt/mahybridfuzz/src/
+COPY configs/ /opt/mahybridfuzz/configs/
+
+WORKDIR /opt/mahybridfuzz
+ENV PYTHONPATH=/opt/mahybridfuzz/src
+
+CMD ["python3", "src/orchestrator.py", "-c", "configs/magma/sqlite3.yml"]

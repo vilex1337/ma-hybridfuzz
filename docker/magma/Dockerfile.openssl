@@ -1,0 +1,30 @@
+FROM aflplusplus/aflplusplus:latest
+
+RUN apt-get update && apt-get install -y \
+    perl \
+    make \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+RUN git clone https://github.com/openssl/openssl.git /targets/openssl && \
+    cd /targets/openssl && git checkout 3bd5319b5d0df9ecf05c8baba2c401ad8e3ba130
+
+RUN mkdir -p /targets/magma/openssl
+COPY targets/magma/openssl/Makefile /targets/magma/openssl/Makefile
+
+RUN mkdir -p /workspace/{corpus,crashes,mutators,distance_cache,coverage,logs,memory,instrumented} \
+    && mkdir -p /opt/mahybridfuzz/src
+
+COPY src/ /opt/mahybridfuzz/src/
+COPY configs/ /opt/mahybridfuzz/configs/
+
+WORKDIR /opt/mahybridfuzz
+ENV PYTHONPATH=/opt/mahybridfuzz/src
+
+CMD ["python3", "src/orchestrator.py", "-c", "configs/magma/openssl.yml"]

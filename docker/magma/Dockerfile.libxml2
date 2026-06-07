@@ -1,0 +1,35 @@
+FROM aflplusplus/aflplusplus:latest
+
+RUN apt-get update && apt-get install -y \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    zlib1g-dev \
+    liblzma-dev \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+RUN git clone https://gitlab.gnome.org/GNOME/libxml2.git /targets/libxml2 && \
+    cd /targets/libxml2 && git checkout ec6e3efb06d7b15cf5a2328fabd3845acea4c815
+
+RUN mkdir -p /targets/magma/libxml2
+COPY targets/magma/libxml2/Makefile /targets/magma/libxml2/Makefile
+COPY targets/magma/main_stub.cpp /targets/magma/libxml2/main_stub.cpp
+
+RUN mkdir -p /workspace/{corpus,crashes,mutators,distance_cache,coverage,logs,memory,instrumented} \
+    && mkdir -p /opt/mahybridfuzz/src
+
+COPY src/ /opt/mahybridfuzz/src/
+COPY configs/ /opt/mahybridfuzz/configs/
+
+WORKDIR /opt/mahybridfuzz
+ENV PYTHONPATH=/opt/mahybridfuzz/src
+
+CMD ["python3", "src/orchestrator.py", "-c", "configs/magma/libxml2.yml"]

@@ -1,0 +1,9 @@
+{
+  "description": "MA-HybridFuzz persistent memory store",
+  "files": {
+    "pre_phase_<target>__<bug_type>.json": "Per-target pre-phase LLM context (bug_info, target_summary, program_usage)",
+    "fcc_<target>__<bug_type>.json": "Per-target Function Call Chain extracted from Clang AST (entry \u2192 ... \u2192 target_function)",
+    "reassessment_history.json": "History of on-demand reassessment events with confidence deltas",
+    "coverage_snapshots.json": "Periodic AFL++ coverage snapshots for trend analysis"
+  }
+}
