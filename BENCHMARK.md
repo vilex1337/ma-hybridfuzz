@@ -19,7 +19,7 @@
 
 *Benchmark Setting:*
 - Magma (full hoặc subset 20-30 CVEs đại diện)
-- 12h × 4 runs (hoặc 6h × 5 runs) với note resource limit)
+- 6h x 5 runs với note resource limit
 - Baselines: AFLGo, DynamicFuzz (re-impl), Attention-AFLGo, IDFuzz, PBFuzz
 
 ## Benchmark - Magma
@@ -29,7 +29,7 @@ Benchmark Magma được chọn làm benchmark để đo vì:
 - Bug class đa dạng, trải đều các loại CWE khác nhau 
 - Có cơ chế để kiểm tra độ đo TTR và TTE
 ## Phương pháp
-Vì Hosting LLM inference trên kaggle giới hạn 30 tiếng, để tiết kiệm chi phí, nhóm chúng em fuzz 6 tiếng cho mỗi target, mỗi target fuzz 2 lần.
+Vì Hosting LLM inference trên kaggle giới hạn 30 tiếng, để tiết kiệm chi phí, nhóm chúng em fuzz 6 tiếng cho mỗi target, mỗi target fuzz 5 lần.
 ### Các thí nghiệm:
 All followed benchmark setting
 1. Đo overhead 

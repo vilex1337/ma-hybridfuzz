@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     zlib1g-dev \
     liblzma-dev \
+    patch \
     python3-pip \
     python3-venv \
     && rm -rf /var/lib/apt/lists/*
@@ -20,10 +21,23 @@ RUN git clone https://gitlab.gnome.org/GNOME/libxml2.git /targets/libxml2 && \
     cd /targets/libxml2 && git checkout ec6e3efb06d7b15cf5a2328fabd3845acea4c815
 
 RUN mkdir -p /targets/magma/libxml2
+COPY magma/targets/libxml2/patches/ /targets/magma/libxml2/patches/
+RUN find /targets/magma/libxml2/patches/setup \
+         /targets/magma/libxml2/patches/bugs \
+         -name "*.patch" 2>/dev/null | sort | \
+    while read patch; do \
+        name=$(basename "$patch" .patch); \
+        echo "Applying $name"; \
+        sed "s/%MAGMA_BUG%/$name/g" "$patch" | patch -p1 -d /targets/libxml2; \
+    done
+
 COPY targets/magma/libxml2/Makefile /targets/magma/libxml2/Makefile
 COPY targets/magma/main_stub.cpp /targets/magma/libxml2/main_stub.cpp
+COPY magma/targets/libxml2/src/libxml2_xml_read_memory_fuzzer.cc /targets/magma/libxml2/libxml2_xml_read_memory_fuzzer.cc
+COPY magma/targets/libxml2/src/FuzzedDataProvider.h /targets/magma/libxml2/FuzzedDataProvider.h
+COPY magma/targets/libxml2/src/fuzzer_temp_file.h /targets/magma/libxml2/fuzzer_temp_file.h
 
-RUN mkdir -p /workspace/{corpus,crashes,mutators,distance_cache,coverage,logs,memory,instrumented} \
+RUN mkdir -p /workspace/{corpus,output,mutators,distance_cache,coverage,logs,memory,instrumented,seed_code} \
     && mkdir -p /opt/mahybridfuzz/src
 
 COPY src/ /opt/mahybridfuzz/src/

@@ -8,13 +8,14 @@ import signal
 import subprocess
 from pathlib import Path
 
+from config import AppConfig
 from logging_utils import VERBOSE_LEVEL
 
 logger = logging.getLogger("fuzzing.afl_runner")
 
 
 class AFLRunner:
-    def __init__(self, config: dict):
+    def __init__(self, config: AppConfig):
         self.config = config
         self._process = None
         self._output_dir = None
@@ -29,7 +30,7 @@ class AFLRunner:
         afl_env = {
             "AFL_USE_ASAN": "1" if use_asan else "0",
         }
-        if self.config["fuzzer"].get("use_ubsan"):
+        if self.config.fuzzer.use_ubsan:
             afl_env["AFL_USE_UBSAN"] = "1"
         logger.log(
             VERBOSE_LEVEL,
@@ -88,23 +89,23 @@ class AFLRunner:
         # Build AFL++ command
         # ASAN reserves large virtual address ranges; a hard memory cap causes
         # the forkserver to crash before any input is processed.
-        mem = "none" if self.config["fuzzer"].get("use_asan") else str(self.config["fuzzer"]["memory_limit"])
+        mem = "none" if self.config.fuzzer.use_asan else str(self.config.fuzzer.memory_limit)
         cmd = [
             "afl-fuzz",
             "-i", corpus_dir,
             "-o", crashes_dir,
-            "-t", str(self.config["fuzzer"]["exec_timeout"]),
+            "-t", str(self.config.fuzzer.exec_timeout),
             "-m", mem,
         ]
 
         # Add custom mutator if available and enabled
         mutator_files = list(Path(mutator_dir).glob("mutator_*.so"))
-        if mutator_files and self.config["fuzzer"].get("use_custom_mutator", True):
+        if mutator_files and self.config.fuzzer.use_custom_mutator:
             env["AFL_CUSTOM_MUTATOR_LIBRARY"] = ";".join(str(f) for f in mutator_files)
             logger.info("Using custom mutator libraries: %s", [f.name for f in mutator_files])
 
         # Pass AFLGo-format distance file if available (written by AttentionDistanceComputer)
-        dist_cfg = Path(self.config["paths"]["distance_cache"]) / "distance.cfg.txt"
+        dist_cfg = Path(self.config.paths.distance_cache) / "distance.cfg.txt"
         if dist_cfg.exists():
             env["AFL_LLVM_AFLGO_INST_RATIO"] = "100"
             env["AFL_CUSTOM_INFO_OUT"] = str(dist_cfg)
@@ -136,7 +137,7 @@ class AFLRunner:
 
         # Stream AFL++ stdout+stderr to a log file so we can see why it
         # died (e.g. bad core_pattern, calibration failure, bad instrumentation).
-        log_path = Path(self.config["paths"]["logs"]) / "afl_fuzz.log"
+        log_path = Path(self.config.paths.logs) / "afl_fuzz.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self._afl_log = open(log_path, "w")
         logger.info("AFL++ output → %s", log_path)
@@ -187,7 +188,7 @@ class AFLRunner:
             logger.error(
                 "AFL++ exited unexpectedly with rc=%d. See %s for details.",
                 self._process.returncode,
-                Path(self.config["paths"]["logs"]) / "afl_fuzz.log",
+                Path(self.config.paths.logs) / "afl_fuzz.log",
             )
             return None
 

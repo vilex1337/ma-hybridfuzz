@@ -3,6 +3,7 @@ FROM aflplusplus/aflplusplus:latest
 RUN apt-get update && apt-get install -y \
     perl \
     make \
+    patch \
     python3-pip \
     python3-venv \
     && rm -rf /var/lib/apt/lists/*
@@ -15,10 +16,20 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 RUN git clone https://github.com/openssl/openssl.git /targets/openssl && \
     cd /targets/openssl && git checkout 3bd5319b5d0df9ecf05c8baba2c401ad8e3ba130
 
+COPY magma/targets/openssl/src/abilist.txt /targets/openssl/abilist.txt
+
 RUN mkdir -p /targets/magma/openssl
+COPY magma/targets/openssl/patches/ /targets/magma/openssl/patches/
+RUN find /targets/magma/openssl/patches/bugs \
+         -name "*.patch" 2>/dev/null | sort | \
+    while read patch; do \
+        name=$(basename "$patch" .patch); \
+        echo "Applying $name"; \
+        sed "s/%MAGMA_BUG%/$name/g" "$patch" | patch -p1 -d /targets/openssl; \
+    done
 COPY targets/magma/openssl/Makefile /targets/magma/openssl/Makefile
 
-RUN mkdir -p /workspace/{corpus,crashes,mutators,distance_cache,coverage,logs,memory,instrumented} \
+RUN mkdir -p /workspace/{corpus,output,mutators,distance_cache,coverage,logs,memory,instrumented,seed_code} \
     && mkdir -p /opt/mahybridfuzz/src
 
 COPY src/ /opt/mahybridfuzz/src/

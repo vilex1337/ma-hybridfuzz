@@ -10,6 +10,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from config import AppConfig
 from logging_utils import VERBOSE_LEVEL
 from llm.provider import create_provider
 from pre_phase.base_agent import _escape_controls_in_strings
@@ -64,11 +65,11 @@ void afl_custom_deinit(MutatorState *data) {{
 
 
 class MutatorGenerator:
-    def __init__(self, config: dict):
+    def __init__(self, config: AppConfig):
         self.config = config
         self.provider = create_provider(config)
         self.model = self.provider.model
-        self.mutator_dir = Path(config["paths"]["mutators"])
+        self.mutator_dir = Path(config.paths.mutators)
         self.mutator_dir.mkdir(parents=True, exist_ok=True)
 
     def generate(self, analysis: dict, bug_type: str) -> list[Path]:
@@ -104,7 +105,7 @@ class MutatorGenerator:
         try:
             bug_analysis_text = self.provider.generate(
                 prompt=bug_analysis_prompt,
-                max_tokens=self.config["llm"]["max_tokens"],
+                max_tokens=self.config.llm.max_tokens,
                 temperature=0.2,
             )
             logger.log(
@@ -126,8 +127,8 @@ class MutatorGenerator:
         )
         response_text = self.provider.generate(
             prompt=mutator_prompt,
-            max_tokens=self.config["llm"]["max_tokens"],
-            temperature=self.config["llm"]["temperature"],
+            max_tokens=self.config.llm.max_tokens,
+            temperature=self.config.llm.temperature,
         )
         logger.log(
             VERBOSE_LEVEL,
@@ -213,6 +214,7 @@ class MutatorGenerator:
             f"    return new_size;\n"
             f"```\n\n"
             f"### Suggestion\n"
+            f"IMPORTANT: Generate carefully — the C++ code must compile without errors.\n"
             f"Generate 3-5 mutators, one per strategy. Each mutation_logic:\n"
             f"- Is pure C (no C++ features needed, but C++ is allowed)\n"
             f"- Has access to: data (MutatorState*, with data->mutated_out pre-allocated to MAX_FILE bytes),\n"
@@ -257,44 +259,83 @@ class MutatorGenerator:
 
     def _save_mutators(self, mutators: list[dict]) -> list[Path]:
         saved = []
+        max_retries = self.config.mutator_generator.compile_retries
         for mutator in mutators:
             name = mutator.get("name", "unknown_mutator")
             name = "".join(c for c in name if c.isalnum() or c == "_") or "unknown_mutator"
-            logic = mutator.get(
-                "mutation_logic",
-                "    size_t out_size = buf_size;\n"
-                "    uint8_t *copy = (uint8_t *)malloc(out_size);\n"
-                "    if (!copy) {\n"
-                "        *out_buf = buf;\n"
-                "        return buf_size;\n"
-                "    }\n"
-                "    if (out_size > 0) {\n"
-                "        memcpy(copy, buf, out_size);\n"
-                "    }\n"
-                "    *out_buf = copy;\n"
-                "    return out_size;",
-            )
-
-            indented = textwrap.indent(textwrap.dedent(logic), "    ")
-            content = MUTATOR_CPP_TEMPLATE.format(name=name, mutation_logic=indented)
+            logic = mutator.get("mutation_logic", "")
 
             cpp_path = self.mutator_dir / f"mutator_{name}.cpp"
-            cpp_path.write_text(content)
+            so_path = None
+            for attempt in range(max_retries + 1):
+                indented = textwrap.indent(textwrap.dedent(logic), "    ")
+                cpp_path.write_text(MUTATOR_CPP_TEMPLATE.format(name=name, mutation_logic=indented))
+                so_path, error = self._compile_mutator(cpp_path)
+                if so_path:
+                    if attempt > 0:
+                        logger.info("Mutator %s compiled on attempt %d", name, attempt + 1)
+                    break
+                if attempt >= max_retries:
+                    break
+                logger.info(
+                    "Mutator %s compile failed (attempt %d/%d) — asking LLM to fix...",
+                    name, attempt + 1, max_retries + 1,
+                )
+                fixed = self._ask_llm_fix_mutator(logic, error)
+                if not fixed:
+                    logger.warning("LLM returned no fix for mutator %s — aborting retries", name)
+                    break
+                logic = fixed
 
-            so_path = self._compile_mutator(cpp_path)
             if so_path:
                 saved.append(so_path)
                 logger.info("Compiled mutator: %s", so_path.name)
             else:
-                logger.warning("Skipping mutator %s — compile failed", name)
+                logger.warning("Skipping mutator %s — all compile attempts failed", name)
 
         return saved
 
-    def _compile_mutator(self, cpp_path: Path) -> Path | None:
+    def _ask_llm_fix_mutator(self, logic: str, error_msg: str) -> str:
+        """Ask the LLM to fix a mutation_logic body that failed to compile."""
+        prompt = (
+            "### Task\n"
+            "Fix the C++ mutation_logic body below so it compiles without errors "
+            "as the body of afl_custom_fuzz.\n\n"
+            "### Attachment\n"
+            f"### mutation_logic\n{logic}\n\n"
+            f"### Compiler error\n{error_msg}\n\n"
+            "### Suggestion\n"
+            "Available variables: data (MutatorState* with data->mutated_out pre-allocated), "
+            "buf (uint8_t*), buf_size (size_t), add_buf (uint8_t*), add_buf_size (size_t), "
+            "max_size (size_t), out_buf (uint8_t**). "
+            "Must set *out_buf = data->mutated_out and return size_t. "
+            "Do NOT malloc a new buffer.\n\n"
+            "### Answer Template\n"
+            "Reply with ONLY the corrected mutation_logic body. No explanation. No markdown fences."
+        )
+        try:
+            response = self.provider.generate(
+                prompt=prompt,
+                max_tokens=self.config.llm.max_tokens,
+                temperature=0.2,
+            )
+            code = response.strip()
+            if code.startswith("```"):
+                code = code.split("```", 1)[1]
+                if code.startswith(("c\n", "cpp\n", "c++\n")):
+                    code = code.split("\n", 1)[1]
+                code = code.rsplit("```", 1)[0]
+            return code.strip()
+        except Exception as exc:
+            logger.warning("LLM fix request failed for mutator: %s", exc)
+            return ""
+
+    def _compile_mutator(self, cpp_path: Path) -> tuple[Path | None, str]:
         compiler = shutil.which("clang++") or shutil.which("g++")
         if not compiler:
-            logger.error("No C++ compiler found; cannot compile mutator %s", cpp_path.name)
-            return None
+            msg = f"No C++ compiler found; cannot compile mutator {cpp_path.name}"
+            logger.error(msg)
+            return None, msg
 
         so_path = cpp_path.with_suffix(".so")
         cmd = [compiler, "-shared", "-fPIC", "-O2", "-o", str(so_path), str(cpp_path)]
@@ -302,12 +343,10 @@ class MutatorGenerator:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             logger.error("Compiler error for %s: %s", cpp_path.name, exc)
-            return None
+            return None, str(exc)
 
         if result.returncode != 0:
-            logger.error(
-                "Compile failed for %s:\n%s", cpp_path.name, result.stderr.strip()
-            )
-            return None
+            logger.error("Compile failed for %s:\n%s", cpp_path.name, result.stderr.strip())
+            return None, result.stderr.strip()
 
-        return so_path
+        return so_path, ""

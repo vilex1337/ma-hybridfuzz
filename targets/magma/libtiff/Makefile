@@ -43,11 +43,11 @@ tiff_read_rgba_fuzzer: $(INSTALL_DIR)/lib/libtiff.a
 $(INSTALL_DIR)/lib/libtiff.a:
 	cd $(LIBTIFF_SRC) && autoreconf -f -i
 	mkdir -p $(BUILD_DIR)
-	cd $(BUILD_DIR) && CFLAGS= CXXFLAGS= $(LIBTIFF_SRC)/configure \
+	cd $(BUILD_DIR) && CFLAGS="$(CFLAGS)" CXXFLAGS="$(CXXFLAGS)" $(LIBTIFF_SRC)/configure \
 	    CC="$(CC)" CXX="$(CXX)" \
 	    --disable-shared --prefix="$(INSTALL_DIR)"
-	CFLAGS= CXXFLAGS= $(MAKE) -C $(BUILD_DIR) -j$$(nproc 2>/dev/null || echo 1)
-	CFLAGS= CXXFLAGS= $(MAKE) -C $(BUILD_DIR) install
+	$(MAKE) -C $(BUILD_DIR) -j$$(nproc 2>/dev/null || echo 1)
+	$(MAKE) -C $(BUILD_DIR) install
 
 clean:
 	rm -rf $(INSTALL_DIR) $(CURDIR)/tiff_read_rgba_fuzzer

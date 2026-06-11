@@ -42,7 +42,7 @@ services:
       context: .
       dockerfile: docker/magma/Dockerfile.libpng
     volumes:
-      - ./workspace:/workspace
+      - ./workspace/libpng:/workspace
       - ./src:/opt/mahybridfuzz/src
       - ./configs:/opt/mahybridfuzz/configs
     environment:
@@ -50,6 +50,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     privileged: true
     security_opt:
       - seccomp:unconfined
@@ -60,7 +62,7 @@ services:
       context: .
       dockerfile: docker/magma/Dockerfile.libtiff
     volumes:
-      - ./workspace:/workspace
+      - ./workspace/libtiff:/workspace
       - ./src:/opt/mahybridfuzz/src
       - ./configs:/opt/mahybridfuzz/configs
     environment:
@@ -68,6 +70,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     privileged: true
     security_opt:
       - seccomp:unconfined
@@ -78,7 +82,7 @@ services:
       context: .
       dockerfile: docker/magma/Dockerfile.libxml2
     volumes:
-      - ./workspace:/workspace
+      - ./workspace/libxml2:/workspace
       - ./src:/opt/mahybridfuzz/src
       - ./configs:/opt/mahybridfuzz/configs
     environment:
@@ -86,6 +90,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     privileged: true
     security_opt:
       - seccomp:unconfined
@@ -96,7 +102,7 @@ services:
       context: .
       dockerfile: docker/magma/Dockerfile.openssl
     volumes:
-      - ./workspace:/workspace
+      - ./workspace/openssl:/workspace
       - ./src:/opt/mahybridfuzz/src
       - ./configs:/opt/mahybridfuzz/configs
     environment:
@@ -104,6 +110,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     privileged: true
     security_opt:
       - seccomp:unconfined
@@ -114,7 +122,7 @@ services:
       context: .
       dockerfile: docker/magma/Dockerfile.sqlite3
     volumes:
-      - ./workspace:/workspace
+      - ./workspace/sqlite3:/workspace
       - ./src:/opt/mahybridfuzz/src
       - ./configs:/opt/mahybridfuzz/configs
     environment:
@@ -122,6 +130,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     privileged: true
     security_opt:
       - seccomp:unconfined
@@ -132,7 +142,7 @@ services:
       context: .
       dockerfile: docker/magma/Dockerfile.poppler
     volumes:
-      - ./workspace:/workspace
+      - ./workspace/poppler:/workspace
       - ./src:/opt/mahybridfuzz/src
       - ./configs:/opt/mahybridfuzz/configs
     environment:
@@ -140,6 +150,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     privileged: true
     security_opt:
       - seccomp:unconfined
@@ -150,7 +162,7 @@ services:
       context: .
       dockerfile: docker/magma/Dockerfile.php
     volumes:
-      - ./workspace:/workspace
+      - ./workspace/php:/workspace
       - ./src:/opt/mahybridfuzz/src
       - ./configs:/opt/mahybridfuzz/configs
     environment:
@@ -158,6 +170,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     privileged: true
     security_opt:
       - seccomp:unconfined

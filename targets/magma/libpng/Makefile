@@ -38,9 +38,9 @@ libpng_read_fuzzer: $(BUILD_DIR)/libpng16.a
 $(BUILD_DIR)/libpng16.a:
 	cd $(LIBPNG_SRC) && autoreconf -f -i
 	mkdir -p $(BUILD_DIR)
-	cd $(BUILD_DIR) && CFLAGS= CXXFLAGS= $(LIBPNG_SRC)/configure \
+	cd $(BUILD_DIR) && CFLAGS="$(CFLAGS)" CXXFLAGS="$(CXXFLAGS)" $(LIBPNG_SRC)/configure \
 	    CC="$(CC)" CXX="$(CXX)" --disable-shared
-	CFLAGS= CXXFLAGS= $(MAKE) -C $(BUILD_DIR) -j$$(nproc 2>/dev/null || echo 1) libpng16.la
+	$(MAKE) -C $(BUILD_DIR) -j$$(nproc 2>/dev/null || echo 1) libpng16.la
 	cp $(BUILD_DIR)/.libs/libpng16.a $(BUILD_DIR)/libpng16.a
 
 clean:

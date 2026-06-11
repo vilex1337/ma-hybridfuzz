@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     automake \
     libtool \
     pkg-config \
+    patch \
     bison \
     re2c \
     libxml2-dev \
@@ -27,9 +28,19 @@ RUN git clone https://github.com/kkos/oniguruma.git /targets/oniguruma && \
     cd /targets/oniguruma && git checkout 227ec0bd690207812793c09ad70024707c405376
 
 RUN mkdir -p /targets/magma/php
+COPY magma/targets/php/patches/ /targets/magma/php/patches/
+RUN find /targets/magma/php/patches/setup \
+         /targets/magma/php/patches/bugs \
+         -name "*.patch" 2>/dev/null | sort | \
+    while read patch; do \
+        name=$(basename "$patch" .patch); \
+        echo "Applying $name"; \
+        sed "s/%MAGMA_BUG%/$name/g" "$patch" | patch -p1 -d /targets/php; \
+    done
+
 COPY targets/magma/php/Makefile /targets/magma/php/Makefile
 
-RUN mkdir -p /workspace/{corpus,crashes,mutators,distance_cache,coverage,logs,memory,instrumented} \
+RUN mkdir -p /workspace/{corpus,output,mutators,distance_cache,coverage,logs,memory,instrumented,seed_code} \
     && mkdir -p /opt/mahybridfuzz/src
 
 COPY src/ /opt/mahybridfuzz/src/

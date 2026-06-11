@@ -7,7 +7,8 @@ BUILT_STAMP := $(PHP_SRC)/.built_$(_CXX_SLUG)
 
 FUZZER_BIN  := $(CURDIR)/php-fuzz-json
 
-IR_DIR     ?= $(CURDIR)/ir
+IR_DIR              ?= $(CURDIR)/ir
+IR_CONFIGURED_STAMP := $(PHP_SRC)/.ir_configured
 IR_CXX     ?= $(CXX)
 IR_CC      ?= $(CC)
 IR_SOURCES  := $(PHP_SRC)/sapi/fuzzer/fuzzer-sapi.c \
@@ -20,7 +21,7 @@ PHP_IR_SRCS := $(wildcard $(PHP_SRC)/ext/json/*.c) \
 
 all: $(FUZZER_BIN)
 
-ir: $(BUILT_STAMP)
+ir: $(IR_CONFIGURED_STAMP)
 	mkdir -p $(IR_DIR)
 	@for src in $(PHP_IR_SRCS); do \
 	    base=$$(basename "$$src"); dir=$$(basename $$(dirname "$$src")); \
@@ -42,9 +43,15 @@ ir: $(BUILT_STAMP)
 $(FUZZER_BIN): $(BUILT_STAMP)
 	cp $(PHP_SRC)/sapi/fuzzer/php-fuzz-json $(CURDIR)/php-fuzz-json
 
+$(IR_CONFIGURED_STAMP):
+	@test -f "$(PHP_SRC)/main/php_config.h" || { \
+	    echo "[ir] ERROR: php_config.h not found — run 'make all' first to build PHP"; \
+	    exit 1; }
+	touch $(IR_CONFIGURED_STAMP)
+
 $(BUILT_STAMP): $(ONIG_DIR)/lib/libonig.a
 	cd $(PHP_SRC) && ./buildconf --force
-	cd $(PHP_SRC) && CFLAGS= CXXFLAGS= ./configure \
+	cd $(PHP_SRC) && CFLAGS="$(CFLAGS)" CXXFLAGS="$(CXXFLAGS)" ./configure \
 	    CC="$(CC)" CXX="$(CXX)" \
 	    --disable-all \
 	    --enable-fuzzer \
@@ -56,17 +63,18 @@ $(BUILT_STAMP): $(ONIG_DIR)/lib/libonig.a
 	    --with-pic \
 	    ONIG_CFLAGS="-I$(ONIG_DIR)/include" \
 	    ONIG_LIBS="-L$(ONIG_DIR)/lib -lonig"
-	CFLAGS= CXXFLAGS= $(MAKE) -C $(PHP_SRC) -j$$(nproc 2>/dev/null || echo 1)
+	$(MAKE) -C $(PHP_SRC) -j$$(nproc 2>/dev/null || echo 1)
 	touch $(BUILT_STAMP)
+	touch $(IR_CONFIGURED_STAMP)
 
 $(ONIG_DIR)/lib/libonig.a:
 	cd $(ONIG_SRC) && autoreconf -f -i
 	mkdir -p $(ONIG_DIR)/build
-	cd $(ONIG_DIR)/build && CFLAGS= CXXFLAGS= $(ONIG_SRC)/configure \
+	cd $(ONIG_DIR)/build && CFLAGS="$(CFLAGS)" CXXFLAGS="$(CXXFLAGS)" $(ONIG_SRC)/configure \
 	    CC="$(CC)" CXX="$(CXX)" \
 	    --prefix="$(ONIG_DIR)" --disable-shared
-	CFLAGS= CXXFLAGS= $(MAKE) -C $(ONIG_DIR)/build -j$$(nproc 2>/dev/null || echo 1)
-	CFLAGS= CXXFLAGS= $(MAKE) -C $(ONIG_DIR)/build install
+	$(MAKE) -C $(ONIG_DIR)/build -j$$(nproc 2>/dev/null || echo 1)
+	$(MAKE) -C $(ONIG_DIR)/build install
 
 clean:
 	rm -f $(BUILT_STAMP) $(CURDIR)/php-fuzz-json

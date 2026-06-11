@@ -47,16 +47,17 @@ $(FUZZER_BIN): $(BUILT_STAMP)
 	cp $(OPENSSL_SRC)/fuzz/x509 $(CURDIR)/x509
 
 $(BUILT_STAMP):
-	cd $(OPENSSL_SRC) && CFLAGS= CXXFLAGS= ./Configure \
+	cd $(OPENSSL_SRC) && ./Configure \
 	    CC="$(CC)" CXX="$(CXX)" \
 	    enable-fuzz-afl no-shared no-module \
 	    -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION \
-	    --debug
-	CFLAGS= CXXFLAGS= $(MAKE) -C $(OPENSSL_SRC) -j$$(nproc 2>/dev/null || echo 1) \
+	    --debug $(CFLAGS)
+	$(MAKE) -C $(OPENSSL_SRC) -j$$(nproc 2>/dev/null || echo 1) \
 	    LDCMD="$(CXX) $(CXXFLAGS)" build_generated
-	CFLAGS= CXXFLAGS= $(MAKE) -C $(OPENSSL_SRC) -j$$(nproc 2>/dev/null || echo 1) \
+	$(MAKE) -C $(OPENSSL_SRC) -j$$(nproc 2>/dev/null || echo 1) \
 	    LDCMD="$(CXX) $(CXXFLAGS)" fuzz/x509
 	touch $(BUILT_STAMP)
+	touch $(IR_HEADERS_STAMP)
 
 clean:
 	rm -f $(BUILT_STAMP) $(CURDIR)/x509

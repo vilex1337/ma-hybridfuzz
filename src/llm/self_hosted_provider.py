@@ -62,19 +62,31 @@ class SelfHostedProvider(LLMProvider):
         return self._generate(prompt, max_tokens, temperature)
 
     def _post_with_retry(self, url: str, payload: dict) -> requests.Response:
-        """POST with exponential-of-2 retry on temporary errors (5xx, connection, timeout)."""
+        """POST with exponential-of-2 retry on temporary errors (5xx, connection, timeout, non-JSON body)."""
+        last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 resp = requests.post(url, json=payload, timeout=self.timeout)
                 resp.raise_for_status()
+                # Guard against gateway error pages returned with 2xx (e.g. ngrok HTML on tunnel down)
+                ct = resp.headers.get("Content-Type", "")
+                if "application/json" not in ct:
+                    raise ValueError(
+                        f"Server returned non-JSON response (Content-Type: {ct!r}); "
+                        f"body starts with: {resp.text[:120]!r}"
+                    )
                 return resp
             except Exception as exc:
+                last_exc = exc
                 temporary = (
                     isinstance(exc, requests.exceptions.HTTPError)
                     and exc.response is not None
                     and exc.response.status_code >= 500
-                ) or isinstance(exc, (requests.exceptions.ConnectionError,
-                                      requests.exceptions.Timeout))
+                ) or isinstance(exc, (
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    ValueError,  # non-JSON body above
+                ))
                 if attempt == _MAX_RETRIES or not temporary:
                     raise
                 delay = _RETRY_BASE * (2 ** attempt)
@@ -83,7 +95,7 @@ class SelfHostedProvider(LLMProvider):
                     exc, attempt + 1, _MAX_RETRIES, delay,
                 )
                 time.sleep(delay)
-        raise RuntimeError("unreachable")  # satisfies type checkers
+        raise last_exc  # type: ignore[misc]
 
     def _chat(self, prompt: str, max_tokens: int, temperature: float) -> str:
         payload = {

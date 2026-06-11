@@ -1,7 +1,7 @@
 # MA-HybridFuzz — magma/openssl x509 target
 
 logging:
-  verbosity: 1
+  verbosity: 2
 
 attention:
   enabled: false
@@ -22,10 +22,10 @@ target:
     circular chain references.
 
 llm:
-  provider: "self_hosted"
-  model: "qwen2.5-coder-14b"
-  base_url: "https://2add-35-253-68-239.ngrok-free.app/"
-  use_chat: true
+  provider: "cliproxy"
+  model: "gpt-5.4"
+  base_url: "http://host.docker.internal:8317/v1"
+  api_key: "sk-2FKtEdnmkEOJ5OYDWzgOgEClAoBPulYHlps76jzhgPClv"
   max_tokens: 4096
   temperature: 0.3
   timeout: 600
@@ -35,13 +35,13 @@ fuzzer:
   timeout: 21600
   exec_timeout: 1000
   memory_limit: 256
-  seed_count: 20
+  seed_count: 5
   use_asan: true
   use_ubsan: true
-  use_custom_mutator: false
+  use_custom_mutator: true
 
 attention_distance:
-  server_url: "https://523c-8-229-92-43.ngrok-free.app/"
+  server_url: "https://48b4-34-125-68-208.ngrok-free.app"
 
 scheduler:
   attention_weight: 0.6
@@ -49,13 +49,13 @@ scheduler:
   speed_weight: 0.1
 
 reassessment:
-  plateau_threshold: 300
+  plateau_threshold: 1800
   reassessment_coverage_rate: 0.05
   max_reassessments: 100
 
 paths:
   corpus: "/workspace/corpus"
-  crashes: "/workspace/crashes"
+  crashes: "/workspace/output"
   mutators: "/workspace/mutators"
   distance_cache: "/workspace/distance_cache"
   coverage: "/workspace/coverage"

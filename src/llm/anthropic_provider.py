@@ -34,6 +34,7 @@ class AnthropicProvider(LLMProvider):
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}],
         )
+        self._add_usage(response.usage.input_tokens, response.usage.output_tokens)
         for block in response.content:
             if isinstance(block, TextBlock):
                 return block.text

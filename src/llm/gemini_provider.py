@@ -38,4 +38,9 @@ class GeminiProvider(LLMProvider):
                 temperature=temperature,
             ),
         )
+        if response.usage_metadata:
+            self._add_usage(
+                response.usage_metadata.prompt_token_count or 0,
+                response.usage_metadata.candidates_token_count or 0,
+            )
         return response.text or ""

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from config import AppConfig
 from logging_utils import VERBOSE_LEVEL
 from pre_phase.cfg_extractor import CFGExtractor
 from pre_phase.linevul_scorer import LineVulScorer
@@ -33,20 +34,18 @@ INF_DIST = 20.0  # distance assigned to unreachable functions
 class AttentionDistanceComputer:
     """Compute attention-adjusted basic-block distances for directed fuzzing."""
 
-    def __init__(self, config: dict):
+    def __init__(self, config: AppConfig):
         self.config = config
-        self.cache_dir = Path(config["paths"]["distance_cache"])
+        self.cache_dir = Path(config.paths.distance_cache)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        attention_cfg = config.get("attention_distance", {})
-        server_url = attention_cfg.get("server_url", "")
         sid = (
-            config.get("inference_session_id")
-            or attention_cfg.get("sid")
-            or config.get("llm", {}).get("sid")
+            config.inference_session_id
+            or config.attention.sid
+            or config.llm.sid
             or "default"
         )
-        self._scorer = LineVulScorer(server_url, sid=sid)
+        self._scorer = LineVulScorer(config.attention.server_url, sid=sid)
         self._extractor = CFGExtractor(config)
 
         # State loaded by load_cached() or set by compute()
