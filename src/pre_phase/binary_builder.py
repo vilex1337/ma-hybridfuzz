@@ -19,7 +19,7 @@ from logging_utils import VERBOSE_LEVEL
 
 logger = logging.getLogger("pre_phase.binary_builder")
 
-_COMPILE_TIMEOUT = 300  # seconds
+_COMPILE_TIMEOUT = 1200  # seconds (large targets like php/openssl need >300s)
 
 
 def build_binary(

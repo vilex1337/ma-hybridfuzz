@@ -1,0 +1,62 @@
+# MA-HybridFuzz — magma/tiff_read_rgba_fuzzer target
+
+logging:
+  verbosity: 2
+
+attention:
+  enabled: false
+
+target:
+  binary: "/targets/magma/libtiff/tiff_read_rgba_fuzzer"
+  source_dir: "/targets/libtiff"
+  build_dir: "/targets/magma/libtiff"
+  ir_build_dir: "/targets/magma/libtiff"
+  target_function: "TIFFReadDirectory"
+  bug_type: "heap_buffer_overflow"
+  args: ["@@"]
+  program_usage: |
+    libtiff is a TIFF image format library. The fuzzer exercises RGBA
+    image reading via TIFFReadRGBAImage. Interesting inputs: malformed
+    directory entries, corrupt strip/tile data, invalid compression
+    codes, multi-page TIFFs, and unusual photometric interpretations.
+
+llm:
+  provider: "cliproxy"
+  model: "gpt-5.4"
+  base_url: "http://host.docker.internal:8317/v1"
+  api_key: "sk-2FKtEdnmkEOJ5OYDWzgOgEClAoBPulYHlps76jzhgPClv"
+  max_tokens: 4096
+  temperature: 0.3
+  timeout: 600
+
+fuzzer:
+  engine: "afl++"
+  timeout: 21600
+  exec_timeout: 1000
+  memory_limit: 256
+  seed_count: 5
+  use_asan: true
+  use_ubsan: true
+  use_custom_mutator: true
+
+attention_distance:
+  server_url: "https://48b4-34-125-68-208.ngrok-free.app"
+
+scheduler:
+  attention_weight: 0.6
+  coverage_weight: 0.3
+  speed_weight: 0.1
+
+reassessment:
+  plateau_threshold: 1800
+  reassessment_coverage_rate: 0.05
+  max_reassessments: 100
+
+paths:
+  corpus: "/workspace/corpus"
+  crashes: "/workspace/output"
+  mutators: "/workspace/mutators"
+  distance_cache: "/workspace/distance_cache"
+  coverage: "/workspace/coverage"
+  logs: "/workspace/logs"
+  memory: "/workspace/memory"

@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from config import AppConfig
 from logging_utils import VERBOSE_LEVEL
 
 logger = logging.getLogger("pre_phase.cfg_extractor")
@@ -36,8 +37,8 @@ class CFGExtractor:
     Fallback: treats each heuristically-detected function as a single block.
     """
 
-    def __init__(self, config: dict | None = None):
-        self.config = config or {}
+    def __init__(self, config: AppConfig | None = None):
+        self.config = config
         self._file_lines: dict[str, list[str]] = {}
 
     def build_call_graph(self, source_dir: str) -> dict[str, set[str]]:
@@ -146,18 +147,20 @@ class CFGExtractor:
             build_dir,
             output_dir,
         )
+        target_cfg = self.config.target if self.config else None
         env = {
             **os.environ,
-            "CC": self.config.get("target", {}).get("ir_cc", "clang"),
-            "CXX": self.config.get("target", {}).get("ir_cxx", "clang++"),
+            "CC": target_cfg.ir_cc if target_cfg else "clang",
+            "CXX": target_cfg.ir_cxx if target_cfg else "clang++",
             "IR_DIR": str(output_dir),
         }
-        extra_flags = self.config.get("target", {}).get("ir_compile_flags", [])
+        extra_flags = target_cfg.ir_compile_flags if target_cfg else []
         if extra_flags:
             flags = " ".join(extra_flags)
             env["CFLAGS"] = (env.get("CFLAGS", "") + " " + flags).strip()
             env["CXXFLAGS"] = (env.get("CXXFLAGS", "") + " " + flags).strip()
 
+        ir_timeout = target_cfg.ir_build_timeout if target_cfg else 300
         try:
             result = subprocess.run(
                 ["make", "ir"],
@@ -165,13 +168,13 @@ class CFGExtractor:
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=ir_timeout,
             )
         except FileNotFoundError:
             logger.log(VERBOSE_LEVEL, "[CFG] Makefile IR skipped: make not found")
             return []
         except subprocess.TimeoutExpired:
-            logger.warning("[CFG] Makefile IR build timed out after 300s")
+            logger.warning("[CFG] Makefile IR build timed out after %ds", ir_timeout)
             return []
         except OSError as exc:
             logger.warning("[CFG] Makefile IR build OS error: %s", exc)
@@ -203,10 +206,12 @@ class CFGExtractor:
         return ll_files
 
     def _makefile_build_dir(self, source_dir: Path) -> Path | None:
-        target_cfg = self.config.get("target", {})
+        target_cfg = self.config.target if self.config else None
         candidates = []
-        for key in ("ir_build_dir", "build_dir"):
-            value = target_cfg.get(key)
+        for value in (
+            (target_cfg.ir_build_dir if target_cfg else ""),
+            (target_cfg.build_dir if target_cfg else ""),
+        ):
             if value:
                 candidates.append(Path(value))
         candidates.append(source_dir)

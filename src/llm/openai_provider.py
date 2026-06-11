@@ -47,5 +47,7 @@ class OpenAIProvider(LLMProvider):
             kwargs["temperature"] = temperature
 
         response = self.client.chat.completions.create(**kwargs)
+        if response.usage:
+            self._add_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
         content = response.choices[0].message.content
         return content or ""

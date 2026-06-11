@@ -35,6 +35,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from config import AppConfig
+
 logger = logging.getLogger("pre_phase.memory")
 
 # File names inside the memory directory
@@ -83,8 +85,8 @@ class PersistentMemory:
         mem.update_reassessment_confidence(count, coverage_after)
     """
 
-    def __init__(self, config: dict):
-        self._dir = Path(config["paths"].get("memory", "/workspace/memory"))
+    def __init__(self, config: AppConfig):
+        self._dir = Path(config.paths.memory)
         self._dir.mkdir(parents=True, exist_ok=True)
         self._ensure_meta()
 

@@ -46,6 +46,7 @@ workspace/coverage/*
 workspace/logs/*
 workspace/instrumented/*
 workspace/memory/*
+workspace/*
 
 
 # Python

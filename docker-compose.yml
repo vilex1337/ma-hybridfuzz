@@ -36,3 +36,143 @@ services:
     security_opt:
       - seccomp:unconfined
     command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/jsoncpp.yml"]
+
+  magma-libpng:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.libpng
+    volumes:
+      - ./workspace/libpng:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/libpng.yml"]
+
+  magma-libtiff:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.libtiff
+    volumes:
+      - ./workspace/libtiff:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/libtiff.yml"]
+
+  magma-libxml2:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.libxml2
+    volumes:
+      - ./workspace/libxml2:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/libxml2.yml"]
+
+  magma-openssl:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.openssl
+    volumes:
+      - ./workspace/openssl:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/openssl.yml"]
+
+  magma-sqlite3:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.sqlite3
+    volumes:
+      - ./workspace/sqlite3:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/sqlite3.yml"]
+
+  magma-poppler:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.poppler
+    volumes:
+      - ./workspace/poppler:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/poppler.yml"]
+
+  magma-php:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.php
+    volumes:
+      - ./workspace/php:/workspace
+      - ./src:/opt/mahybridfuzz/src
+      - ./configs:/opt/mahybridfuzz/configs
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/php.yml"]

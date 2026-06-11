@@ -17,7 +17,7 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Setup working directories
-RUN mkdir -p /workspace/{corpus,crashes,mutators,distance_cache,coverage,logs} \
+RUN mkdir -p /workspace/{corpus,crashes,output,distance_cache,coverage,logs} \
     && mkdir -p /opt/mahybridfuzz/src
 
 COPY src/ /opt/mahybridfuzz/src/

@@ -1,0 +1,63 @@
+# MA-HybridFuzz — magma/libpng_read_fuzzer target
+
+logging:
+  verbosity: 2
+
+attention:
+  enabled: false
+
+target:
+  binary: "/targets/magma/libpng/libpng_read_fuzzer"
+  source_dir: "/targets/libpng"
+  build_dir: "/targets/magma/libpng"
+  ir_build_dir: "/targets/magma/libpng"
+  target_function: "png_read_row"
+  bug_type: "heap_buffer_overflow"
+  args: ["@@"]
+  program_usage: |
+    libpng is a PNG image decoding library. The fuzzer exercises the
+    full read path via libpng_read_fuzzer, feeding arbitrary bytes as
+    a PNG stream. Interesting inputs: truncated IDAT chunks, corrupt
+    palette entries, invalid bit depths, interlaced images, ancillary
+    chunks (tEXt, zTXt, iTXt), and images with unusual filter types.
+
+llm:
+  provider: "cliproxy"
+  model: "gpt-5.4"
+  base_url: "http://host.docker.internal:8317/v1"
+  api_key: "sk-2FKtEdnmkEOJ5OYDWzgOgEClAoBPulYHlps76jzhgPClv"
+  max_tokens: 4096
+  temperature: 0.3
+  timeout: 600
+
+fuzzer:
+  engine: "afl++"
+  timeout: 21600
+  exec_timeout: 1000
+  memory_limit: 256
+  seed_count: 5
+  use_asan: true
+  use_ubsan: true
+  use_custom_mutator: true
+
+attention_distance:
+  server_url: "https://48b4-34-125-68-208.ngrok-free.app"
+
+scheduler:
+  attention_weight: 0.6
+  coverage_weight: 0.3
+  speed_weight: 0.1
+
+reassessment:
+  plateau_threshold: 1800
+  reassessment_coverage_rate: 0.05
+  max_reassessments: 100
+
+paths:
+  corpus: "/workspace/corpus"
+  crashes: "/workspace/output"
+  mutators: "/workspace/mutators"
+  distance_cache: "/workspace/distance_cache"
+  coverage: "/workspace/coverage"
+  logs: "/workspace/logs"
+  memory: "/workspace/memory"

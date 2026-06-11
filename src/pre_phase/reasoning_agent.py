@@ -249,7 +249,7 @@ class ReasoningAgent(LLMAgent):
                 '  "input_format": "<e.g. P6 PPM image / ELF binary / ASCII text>",\n'
                 '  "seed_type": "<string or code>",\n'
                 '  "seed_content": "<seed string if seed_type is string, else empty string>",\n'
-                '  "seed_code": "<Python script to generate seed file if seed_type is code, else empty string>"\n'
+                '  "seed_code": "<Python script that writes the seed to OUTPUT_PATH (pre-defined variable) if seed_type is code, else empty string. Do NOT import os/struct/zlib — they are pre-imported. Do NOT hardcode a filename; always write to OUTPUT_PATH.>"\n'
                 "}\n"
                 "```"
             ),
@@ -304,6 +304,10 @@ class ReasoningAgent(LLMAgent):
             seed_code              : Python script to generate seed if seed_type == "code"
             candidate_seeds        : list of alternative seeds for ambiguous branches
         """
+        logger.info(
+            "[FCC] reason_along_fcc: deviation=%s goal=%s examined_lines=%d",
+            deviation_function_name, goal_function_name, len(examined_lines),
+        )
         examined_text = (
             "\n".join(examined_lines) if examined_lines else "(no lines recorded)"
         )
@@ -337,7 +341,7 @@ class ReasoningAgent(LLMAgent):
                 '  "modification_rationale": "<why these changes redirect execution to the goal>",\n'
                 '  "seed_type": "<string or code>",\n'
                 '  "seed_content": "<modified seed if seed_type is string, else empty>",\n'
-                '  "seed_code": "<Python script to produce seed file if seed_type is code, else empty>",\n'
+                '  "seed_code": "<Python script that writes the seed to OUTPUT_PATH (pre-defined variable) if seed_type is code, else empty. Do NOT import os/struct/zlib — they are pre-imported. Do NOT hardcode a filename; always write to OUTPUT_PATH.>",\n'
                 '  "candidate_seeds": [\n'
                 '    {"description": "<what this candidate tests>", "seed_content": "<content or empty>", "seed_code": "<code or empty>"}\n'
                 "  ]\n"
@@ -346,7 +350,14 @@ class ReasoningAgent(LLMAgent):
             ),
         )
         try:
-            return self._parse_json(self._query_llm(prompt, temperature=0.3))
+            result = self._parse_json(self._query_llm(prompt, temperature=0.3))
+            n_candidates = len(result.get("candidate_seeds", []))
+            logger.info(
+                "[FCC] reason_along_fcc done: seed_type=%s candidates=%d rationale=%s",
+                result.get("seed_type"), n_candidates,
+                result.get("modification_rationale", "")[:120],
+            )
+            return result
         except (json.JSONDecodeError, KeyError) as e:
             logger.error("Failed to parse FCC reasoning response: %s", e)
             return {
@@ -427,7 +438,7 @@ class ReasoningAgent(LLMAgent):
                 '  "rationale": "<why this input reaches the neighbor function>",\n'
                 '  "seed_type": "<string or code>",\n'
                 '  "seed_content": "<seed if seed_type is string, else empty>",\n'
-                '  "seed_code": "<Python script to produce seed if seed_type is code, else empty>"\n'
+                '  "seed_code": "<Python script that writes the seed to OUTPUT_PATH (pre-defined variable) if seed_type is code, else empty. Do NOT import os/struct/zlib — they are pre-imported. Do NOT hardcode a filename; always write to OUTPUT_PATH.>"\n'
                 "}\n"
                 "```"
             ),

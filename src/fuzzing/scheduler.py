@@ -10,21 +10,22 @@ from pathlib import Path
 
 import numpy as np
 
+from config import AppConfig
 from logging_utils import VERBOSE_LEVEL
 
 logger = logging.getLogger("fuzzing.scheduler")
 
 
 class AttentionScheduler:
-    def __init__(self, config: dict):
+    def __init__(self, config: AppConfig):
         self.config = config
         self._distance_matrix = None
         self._functions = None
         self._target = None
         self._weights = {
-            "attention": config["scheduler"]["attention_weight"],
-            "coverage": config["scheduler"]["coverage_weight"],
-            "speed": config["scheduler"]["speed_weight"],
+            "attention": config.scheduler.attention_weight,
+            "coverage": config.scheduler.coverage_weight,
+            "speed": config.scheduler.speed_weight,
         }
 
     def set_distance_matrix(self, data: dict):
@@ -137,7 +138,7 @@ class AttentionScheduler:
             distances[func] = float(matrix[i][target_idx])
         finite = [distance for distance in distances.values() if np.isfinite(distance)]
 
-        output_path = Path(self.config["paths"]["distance_cache"]) / "afl_distances.json"
+        output_path = Path(self.config.paths.distance_cache) / "afl_distances.json"
         with open(output_path, "w") as f:
             json.dump(distances, f, indent=2)
 

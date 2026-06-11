@@ -13,6 +13,7 @@ from pathlib import Path
 
 import yaml
 
+from config import AppConfig
 from logging_utils import VERBOSE_LEVEL, configure_logging
 from pre_phase.reasoning_agent import ReasoningAgent
 from pre_phase.reassessment_agent import ReassessmentAgent
@@ -24,24 +25,30 @@ from pre_phase.call_chain_extractor import CallChainExtractor
 from pre_phase.coverage_checker import CoverageChecker
 from fuzzing.afl_runner import AFLRunner
 from fuzzing.scheduler import AttentionScheduler
+from benchmark.metrics import BenchmarkMetrics
 
 logger = logging.getLogger("orchestrator")
 
 
 class Orchestrator:
-    def __init__(self, config_path: str, verbosity: int | None = None):
+    def __init__(self, config_path: str, verbosity: int | None = None, force_restart: bool = False, overhead_only: bool = False):
         with open(config_path) as f:
-            self.config = yaml.safe_load(f)
+            _raw = yaml.safe_load(f)
 
-        self.session_id = self._resolve_session_id(config_path)
-        self.config["inference_session_id"] = self.session_id
-        self.config.setdefault("session", {})["id"] = self.session_id
+        self._force_restart = force_restart
+        self._overhead_only = overhead_only
 
-        configured_verbosity = self.config.get("logging", {}).get("verbosity", 1)
+        self.session_id = self._resolve_session_id(config_path, _raw)
+        _raw["inference_session_id"] = self.session_id
+        _raw.setdefault("session", {})["id"] = self.session_id
+
+        self.config: AppConfig = AppConfig.from_dict(_raw)
+
+        configured_verbosity = self.config.logging_cfg.verbosity
         self.verbosity = configured_verbosity if verbosity is None else verbosity
 
         # Configure console and file logging now that the config log path is available.
-        log_dir = Path(self.config["paths"]["logs"])
+        log_dir = Path(self.config.paths.logs)
         configure_logging(self.verbosity, log_dir / "orchestrator.log")
         logger.log(
             VERBOSE_LEVEL,
@@ -61,6 +68,7 @@ class Orchestrator:
         self.coverage_checker = CoverageChecker(self.config)
         self.afl = AFLRunner(self.config)
         self.scheduler = AttentionScheduler(self.config)
+        self.metrics = BenchmarkMetrics(self.config)
 
         # Pre-phase context preserved for reassessment (avoids re-querying LLM)
         self._pre_phase_ctx: dict = {}
@@ -74,10 +82,10 @@ class Orchestrator:
         logger.info("Received signal %d, shutting down...", signum)
         self._running = False
 
-    def _resolve_session_id(self, config_path: str) -> str:
-        session_cfg = self.config.get("session", {})
-        llm_cfg = self.config.get("llm", {})
-        attention_cfg = self.config.get("attention_distance", {})
+    def _resolve_session_id(self, config_path: str, raw: dict) -> str:
+        session_cfg = raw.get("session", {})
+        llm_cfg = raw.get("llm", {})
+        attention_cfg = raw.get("attention_distance", {})
         configured = (
             session_cfg.get("id")
             or llm_cfg.get("sid")
@@ -87,7 +95,7 @@ class Orchestrator:
         if configured:
             raw_sid = str(configured)
         else:
-            target_cfg = self.config.get("target", {})
+            target_cfg = raw.get("target", {})
             target_name = (
                 target_cfg.get("target_function")
                 or Path(str(target_cfg.get("binary", ""))).stem
@@ -98,11 +106,24 @@ class Orchestrator:
         sid = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_sid).strip("._-")
         return sid or "default"
 
+    def _force_restart_cleanup(self):
+        import shutil
+        output_dir = Path(self.config.paths.crashes)
+        if output_dir.exists():
+            logger.info("[Force-restart] Deleting output directory: %s", output_dir)
+            shutil.rmtree(output_dir)
+            logger.info("[Force-restart] Output directory deleted — starting from scratch")
+        else:
+            logger.info("[Force-restart] No existing output directory found — nothing to delete")
+
     def run(self):
+        if self._force_restart:
+            self._force_restart_cleanup()
+
         logger.info("=== MA-HybridFuzz Starting ===")
         logger.info("Inference session: %s", self.session_id)
-        logger.info("Target: %s", self.config["target"]["binary"])
-        logger.info("Target function: %s", self.config["target"]["target_function"])
+        logger.info("Target: %s", self.config.target.binary)
+        logger.info("Target function: %s", self.config.target.target_function)
         logger.log(
             VERBOSE_LEVEL,
             "[Init] Components ready: reasoning=%s reassessment=%s memory=%s attention=%s afl=%s scheduler=%s",
@@ -114,23 +135,41 @@ class Orchestrator:
             type(self.scheduler).__name__,
         )
 
-        # Phase 1: Pre-phase (Gap 3 - LLM-based)
-        logger.info("--- Phase 1: Pre-phase (LLM) ---")
-        self._run_pre_phase()
+        try:
+            # Phase 1: Pre-phase (Gap 3 - LLM-based)
+            logger.info("--- Phase 1: Pre-phase (LLM) ---")
+            self._run_pre_phase()
 
-        # Phase 2: Fuzzing loop (Gap 1 - Native speed)
-        logger.info("--- Phase 2: Fuzzing Loop ---")
-        self._run_fuzzing_loop()
+            if self._overhead_only:
+                logger.info("--- Overhead-only mode: stopping after pre-phase ---")
+                return
+
+            # Phase 2: Fuzzing loop (Gap 1 - Native speed)
+            logger.info("--- Phase 2: Fuzzing Loop ---")
+            self.metrics.start_phase("fuzzing_loop")
+            self._run_fuzzing_loop()
+            self.metrics.end_phase("fuzzing_loop")
+
+            fcc = self._pre_phase_ctx.get("fcc", [])
+            binary = self._instrumented_binary or self.config.target.binary
+            output_dir = self.config.paths.crashes
+            if fcc and binary:
+                self.metrics.compute_imr(self.coverage_checker, binary, fcc, output_dir)
+        except Exception as exc:
+            self.metrics.mark_error(type(exc).__name__)
+            raise
+        finally:
+            self.metrics.finish()
 
         logger.info("=== MA-HybridFuzz Complete ===")
         self._report_results()
 
     def _run_pre_phase(self):
-        target_function = self.config["target"]["target_function"]
-        source_dir = self.config["target"]["source_dir"]
-        bug_report = self.config["target"].get("bug_report", "")
-        program_usage = self.config["target"].get("program_usage", "")
-        bug_type = self.config["target"]["bug_type"]
+        target_function = self.config.target.target_function
+        source_dir = self.config.target.source_dir
+        bug_report = self.config.target.bug_report
+        program_usage = self.config.target.program_usage
+        bug_type = self.config.target.bug_type
         logger.log(
             VERBOSE_LEVEL,
             "[Pre-phase] Inputs: source_dir=%s bug_type=%s bug_report_chars=%d program_usage_chars=%d",
@@ -140,13 +179,15 @@ class Orchestrator:
             len(program_usage),
         )
 
+        self.metrics.start_phase("static_analysis")
+
         # ── FCC: Function Call Chain ──────────────────────────────────────────
         # Resolution order (first match wins):
         #   1. Explicit list in config  → user override, always respected.
         #   2. Persistent memory cache  → skip re-extraction on restart.
         #   3. Clang AST extraction     → static analysis, result is cached.
         #   4. Empty list               → fall back to functionality-based mode.
-        fcc: list[str] = self.config["target"].get("fcc", [])
+        fcc: list[str] = self.config.target.fcc
 
         if fcc:
             logger.info(
@@ -188,9 +229,8 @@ class Orchestrator:
                         "reasoning will fall back to functionality-based mode."
                     )
 
-        # ── SA: Static Analysis ───────────────────────────────────────────────
         # Compute attention distance matrix (uses Clang-AST-derived call graph)
-        if self.config.get("attention", {}).get("enabled", True):
+        if self.config.attention.enabled:
             logger.info("[Pre-phase SA] Computing attention distance matrix...")
             self.attention.compute(source_dir=source_dir, target_function=target_function)
             logger.info("[Pre-phase SA] Attention distance matrix cached")
@@ -201,14 +241,14 @@ class Orchestrator:
         # Build the LLVM source-coverage binary used by CoverageChecker to
         # determine which functions a seed reaches at runtime (RANDLUZZ §3.3.2).
         # This is separate from the AFL++ fuzzing binary.
-        binary = self.config["target"].get("binary", "")
-        build_dir = self.config["target"].get("build_dir", source_dir)
+        binary = self.config.target.binary
+        build_dir = self.config.target.build_dir or source_dir
         logger.log(
             VERBOSE_LEVEL,
             "[Pre-phase Coverage] Build inputs: build_dir=%s reference_binary=%s coverage_dir=%s",
             build_dir,
             binary,
-            self.config["paths"].get("coverage"),
+            self.config.paths.coverage,
         )
         logger.info("[Pre-phase Coverage] Building coverage-instrumented binary...")
         cov_ok = self.coverage_checker.build(
@@ -231,45 +271,28 @@ class Orchestrator:
         logger.log(
             VERBOSE_LEVEL,
             "[Pre-phase AFL++] Instrumentation inputs: build_dir=%s binary=%s use_asan=%s use_ubsan=%s",
-            self.config["target"].get("build_dir", self.config["target"]["source_dir"]),
-            self.config["target"]["binary"],
-            self.config["fuzzer"].get("use_asan"),
-            self.config["fuzzer"].get("use_ubsan"),
+            self.config.target.build_dir or self.config.target.source_dir,
+            self.config.target.binary,
+            self.config.fuzzer.use_asan,
+            self.config.fuzzer.use_ubsan,
         )
         try:
             self._instrumented_binary = self.afl.instrument(
-                binary=self.config["target"]["binary"],
-                source_dir=self.config["target"].get("build_dir", self.config["target"]["source_dir"]),
-                use_asan=self.config["fuzzer"]["use_asan"],
+                binary=self.config.target.binary,
+                source_dir=self.config.target.build_dir or self.config.target.source_dir,
+                use_asan=self.config.fuzzer.use_asan,
             )
             logger.info("[Pre-phase AFL++] Instrumented binary ready: %s", self._instrumented_binary)
         except RuntimeError as exc:
             logger.error("[Pre-phase AFL++] Instrumentation failed: %s", exc)
+            self.metrics.end_phase("static_analysis")
             raise
 
-        def _configured_corpus_dir():
-            candidate_paths = []
-            for section_name in ("fuzzing", "afl", "aflpp"):
-                section = self.config.get(section_name, {})
-                if not isinstance(section, dict):
-                    continue
-                for key in ("corpus_dir", "input_dir", "seed_dir"):
-                    value = section.get(key)
-                    if value:
-                        candidate_paths.append(value)
-
-            for path_str in candidate_paths:
-                corpus_dir = Path(path_str)
-                if corpus_dir.exists():
-                    return corpus_dir
-
-            if candidate_paths:
-                return Path(candidate_paths[0])
-            return None
+        self.metrics.end_phase("static_analysis")
 
         def _corpus_has_seed():
-            corpus_dir = _configured_corpus_dir()
-            if corpus_dir is None or not corpus_dir.exists() or not corpus_dir.is_dir():
+            corpus_dir = Path(self.config.paths.corpus)
+            if not corpus_dir.exists() or not corpus_dir.is_dir():
                 return False
             return any(entry.is_file() for entry in corpus_dir.iterdir())
 
@@ -285,6 +308,7 @@ class Orchestrator:
                     "Memory summary: %s",
                     self.memory.summary(),
                 )
+                self.metrics.mark_cached()
                 return
 
             logger.warning(
@@ -293,6 +317,8 @@ class Orchestrator:
                 target_function,
                 bug_type,
             )
+
+        self.metrics.start_phase("llm_prephase")
 
         # ── Bug Information ───────────────────────────────────────────────────
         if cached_ctx and cached_ctx.get("bug_info"):
@@ -327,18 +353,6 @@ class Orchestrator:
                 target_summary.get("functionality", "")[:80],
             )
 
-        # Summarize FCC intermediate functions if provided
-        fcc_summaries: dict[str, dict] = {target_function: target_summary}
-        for func_name in fcc:
-            if func_name == target_function:
-                continue
-            src = self._load_function_source(source_dir, func_name)
-            fcc_summaries[func_name] = self.reasoning.summarize_function(
-                func_name=func_name,
-                func_declaration=src.get("declaration", ""),
-                func_body=src.get("body", ""),
-            )
-
         # ── Reachable Seed Generation ─────────────────────────────────────────
         input_format = cached_ctx.get("input_format", "unknown") if cached_ctx else "unknown"
         if _corpus_has_seed():
@@ -363,7 +377,6 @@ class Orchestrator:
             reachable_seeds = self._generate_reachable_seeds(
                 preliminary_seed=prelim,
                 fcc=fcc,
-                fcc_summaries=fcc_summaries,
                 target_function=target_function,
                 target_summary=target_summary,
                 source_dir=source_dir,
@@ -388,7 +401,7 @@ class Orchestrator:
             logger.info("[Pre-phase Opt] Wrote %d seeds", len(written))
 
         # ── Bug-Specific Mutators ─────────────────────────────────────────────
-        if not self.config["fuzzer"].get("use_custom_mutator", True):
+        if not self.config.fuzzer.use_custom_mutator:
             logger.info("[Pre-phase Mutator] use_custom_mutator=false — skipping mutator generation.")
         else:
             logger.info("[Pre-phase Mutator] Generating bug-specific mutators...")
@@ -399,7 +412,7 @@ class Orchestrator:
                     "vulnerability_pattern": bug_info.get("cause", ""),
                     "trigger_conditions": bug_info.get("trigger_conditions", []),
                 },
-                bug_type=bug_info.get("vulnerability_type", self.config["target"]["bug_type"]),
+                bug_type=bug_info.get("vulnerability_type", self.config.target.bug_type),
             )
             logger.info("[Pre-phase Mutator] Generated %d custom mutators", len(mutators))
 
@@ -417,12 +430,13 @@ class Orchestrator:
         # Write to disk so a restarted orchestrator can skip the LLM pre-phase.
         self.memory.save_pre_phase_ctx(target_function, bug_type, self._pre_phase_ctx)
 
+        self.metrics.end_phase("llm_prephase")
+
     def _generate_reachable_seeds(
         self,
         preliminary_seed: dict,
         fcc: list[str],
-        fcc_summaries: dict[str, dict],  # noqa: ARG002 – reserved for future use
-        target_function: str,
+target_function: str,
         target_summary: dict,
         source_dir: str,
         program_usage: str,
@@ -473,7 +487,7 @@ class Orchestrator:
         )
 
         # ── Step 1: Materialise preliminary seed to a temp file ──────────────
-        binary = self.config["target"].get("binary", "")
+        binary = self.config.target.binary
         temp_seed = self._materialize_seed_temp(preliminary_seed)
 
         if temp_seed is None:
@@ -601,7 +615,7 @@ class Orchestrator:
             "[Pre-phase Opt] No fastest path — reasoning from neighbour functions"
         )
         seeds = list(existing_seeds)
-        if not self.config.get("attention", {}).get("enabled", True):
+        if not self.config.attention.enabled:
             return seeds
         neighbor_names = self.attention.get_neighbors(target_function, top_k=3)
         for neighbor_name in neighbor_names:
@@ -680,7 +694,7 @@ class Orchestrator:
                 suffix="_probe_seed", delete=False
             ) as tmp:
                 out_path = Path(tmp.name)
-            result = self.seed_gen._run_seed_code(code, out_path)
+            result, _ = self.seed_gen._run_seed_code(code, out_path)
             return result   # Path or None
 
         return None
@@ -799,15 +813,15 @@ class Orchestrator:
             VERBOSE_LEVEL,
             "[Fuzzing] Initializing loop: instrumented=%s corpus=%s crashes=%s mutators=%s timeout=%ss",
             instrumented,
-            self.config["paths"]["corpus"],
-            self.config["paths"]["crashes"],
-            self.config["paths"]["mutators"],
-            self.config["fuzzer"]["timeout"],
+            self.config.paths.corpus,
+            self.config.paths.crashes,
+            self.config.paths.mutators,
+            self.config.fuzzer.timeout,
         )
 
         # Load pre-computed data
         distance_matrix = {}
-        if self.config.get("attention", {}).get("enabled", True):
+        if self.config.attention.enabled:
             distance_matrix = self.attention.load_cached()
         logger.log(
             VERBOSE_LEVEL,
@@ -822,25 +836,26 @@ class Orchestrator:
         logger.info("[Fuzzing] Starting AFL++ with attention-guided scheduling...")
         self.afl.start(
             instrumented_binary=instrumented,
-            corpus_dir=self.config["paths"]["corpus"],
-            crashes_dir=self.config["paths"]["crashes"],
-            mutator_dir=self.config["paths"]["mutators"],
+            corpus_dir=self.config.paths.corpus,
+            crashes_dir=self.config.paths.crashes,
+            mutator_dir=self.config.paths.mutators,
             scheduler=self.scheduler,
         )
 
         # Monitor loop
-        timeout = self.config["fuzzer"]["timeout"]
-        reassessment_cfg = self.config.get("reassessment", {})
-        plateau_threshold = reassessment_cfg.get("plateau_threshold", 300)
-        max_reassessments = reassessment_cfg.get("max_reassessments", 5)
+        timeout = self.config.fuzzer.timeout
+        plateau_threshold = self.config.reassessment.plateau_threshold
+        max_reassessments = self.config.reassessment.max_reassessments
         reassessment_coverage_rate = self._normalize_rate(
-            reassessment_cfg.get("reassessment_coverage_rate", 0.05)
+            self.config.reassessment.reassessment_coverage_rate
         )
         reassessment_count = 0
         last_reassessment_coverage = 0   # coverage at the time of last reassessment
         coverage_window_start_time = time.time()
         coverage_window_start_count = 0
+        prev_coverage = 0
         start_time = time.time()
+        last_stats: dict | None = None
         logger.log(
             VERBOSE_LEVEL,
             "[Fuzzing] Reassessment policy: plateau_threshold=%ss coverage_rate=%.4f max_reassessments=%d",
@@ -853,6 +868,7 @@ class Orchestrator:
             stats = self.afl.get_stats()
             if stats is None:
                 continue
+            last_stats = stats
 
             current_coverage = stats.get("paths_total", 0)
             crashes = stats.get("unique_crashes", 0)
@@ -866,6 +882,19 @@ class Orchestrator:
                 stats.get("execs_per_sec", "N/A"),
             )
 
+            # ── Effectiveness metrics: TTE and TTR ────────────────────────────
+            if crashes > 0:
+                self.metrics.poll_tte(self.config.paths.crashes)
+            if current_coverage > prev_coverage and not self.metrics.has_ttr:
+                self.metrics.poll_ttr(
+                    coverage_checker=self.coverage_checker,
+                    binary=self.config.target.binary,
+                    target_fn=self.config.target.target_function,
+                    fcc=self._pre_phase_ctx.get("fcc", []),
+                    crashes_dir=self.config.paths.crashes,
+                    elapsed_s=elapsed,
+                )
+
             # ── Persistent Memory: snapshot coverage every poll cycle ─────────
             self.memory.record_coverage_snapshot(stats)
 
@@ -877,6 +906,8 @@ class Orchestrator:
                     coverage_after=current_coverage,
                 )
                 last_reassessment_coverage = current_coverage
+
+            prev_coverage = current_coverage
 
             # ── Phase 3: On-Demand Reassessment ──────────────────────────────
             now = time.time()
@@ -918,6 +949,13 @@ class Orchestrator:
                 coverage_window_start_count = current_coverage
 
         self.afl.stop()
+
+        if last_stats:
+            self.metrics.set("unique_crashes", last_stats.get("unique_crashes", 0))
+            self.metrics.set("edges_found", _parse_int(last_stats.get("edges_found", "")))
+            bitmap_raw = last_stats.get("bitmap_cvg", "")
+            self.metrics.set("bitmap_cvg", _parse_float_pct(bitmap_raw))
+
         self._fetch_inference_metrics()
 
     @staticmethod
@@ -936,24 +974,43 @@ class Orchestrator:
         return max(current - previous, 0) / previous
 
     def _fetch_inference_metrics(self):
-        """Call GET /metrics/<sid> on the self-hosted inference server and log the result."""
-        llm_cfg = self.config.get("llm", {})
-        if llm_cfg.get("provider", "").lower() != "self_hosted":
-            return
-        import requests as _req
-        base_url = (llm_cfg.get("base_url") or os.getenv("SELF_HOSTED_BASE_URL", "")).rstrip("/")
-        if not base_url:
-            return
-        try:
-            resp = _req.get(f"{base_url}/metrics/{self.session_id}", timeout=10)
-            resp.raise_for_status()
-            m = resp.json()
-            logger.info("=== Inference Metrics (%s) ===", self.session_id)
-            logger.info("Requests made:       %s", m.get("requests", "N/A"))
-            logger.info("Input tokens total:  %s", m.get("input_tokens", "N/A"))
-            logger.info("Output tokens total: %s", m.get("output_tokens", "N/A"))
-        except Exception as exc:
-            logger.warning("Could not fetch inference metrics: %s", exc)
+        """Collect LLM token usage and request count; log and save to benchmark metrics."""
+        provider_name = self.config.llm.provider
+
+        if provider_name == "self_hosted":
+            import requests as _req
+            base_url = (self.config.llm.base_url or os.getenv("SELF_HOSTED_BASE_URL", "")).rstrip("/")
+            if not base_url:
+                return
+            try:
+                resp = _req.get(f"{base_url}/metrics/{self.session_id}", timeout=10)
+                resp.raise_for_status()
+                m = resp.json()
+                requests_made = m.get("requests", 0)
+                input_tokens = m.get("input_tokens", 0)
+                output_tokens = m.get("output_tokens", 0)
+            except Exception as exc:
+                logger.warning("Could not fetch inference metrics: %s", exc)
+                return
+        else:
+            # Sum usage counters accumulated by each provider instance.
+            provider_instances = [
+                getattr(self.reasoning, "provider", None),
+                getattr(self.reassessment, "provider", None),
+                getattr(self.mutator_gen, "provider", None),
+                getattr(self.seed_gen, "_provider", None),
+            ]
+            requests_made = sum(p.request_count for p in provider_instances if p is not None)
+            input_tokens = sum(p.input_tokens for p in provider_instances if p is not None)
+            output_tokens = sum(p.output_tokens for p in provider_instances if p is not None)
+
+        logger.info("=== Inference Metrics (%s) ===", self.session_id)
+        logger.info("Requests made:       %s", requests_made)
+        logger.info("Input tokens total:  %s", input_tokens)
+        logger.info("Output tokens total: %s", output_tokens)
+        self.metrics.set("llm_requests", requests_made)
+        self.metrics.set("llm_input_tokens", input_tokens)
+        self.metrics.set("llm_output_tokens", output_tokens)
 
     def _run_reassessment(self, afl_stats: dict, reassessment_count: int, plateau_s: int = 0):
         """
@@ -979,8 +1036,8 @@ class Orchestrator:
             logger.warning("[Reassessment] No pre-phase context available, skipping.")
             return
 
-        corpus_dir = self.config["paths"]["corpus"]
-        crashes_dir = self.config["paths"]["crashes"]
+        corpus_dir = self.config.paths.corpus
+        crashes_dir = self.config.paths.crashes
 
         # ── Build runtime summaries (no LLM) ─────────────────────────────────
         corpus_summary = ReassessmentAgent.summarize_corpus(corpus_dir)
@@ -998,7 +1055,7 @@ class Orchestrator:
         target_info = {
             "target_function": ctx.get("target_function", ""),
             "bug_type": ctx.get("bug_info", {}).get("vulnerability_type",
-                         self.config["target"]["bug_type"]),
+                         self.config.target.bug_type),
             "input_format": ctx.get("input_format", "unknown"),
         }
 
@@ -1011,7 +1068,7 @@ class Orchestrator:
         goal_function_name: str | None = None
 
         if best_queue_input and len(fcc) >= 2:
-            binary = self.config["target"].get("binary", "")
+            binary = self.config.target.binary
             try:
                 reached = self.coverage_checker.check_reached_functions(
                     binary=binary,
@@ -1030,7 +1087,7 @@ class Orchestrator:
                     deviation_function_name = derived_fn
                     goal_function_name = fcc[derived_idx + 1]
                     src = self._load_function_source(
-                        self.config["target"].get("source_dir", ""), derived_fn
+                        self.config.target.source_dir, derived_fn
                     )
                     deviation_function_body = src.get("body", "")
             except Exception as exc:
@@ -1113,7 +1170,7 @@ class Orchestrator:
         )
 
     def _report_results(self):
-        output_dir = Path(self.config["paths"]["crashes"])
+        output_dir = Path(self.config.paths.crashes)
         # AFL++ writes crashes under <out>/default/crashes/id:* (when launched
         # with default fuzzer ID) or <out>/<name>/crashes/id:* for named runs.
         # Fall back to a recursive glob so we count crashes regardless of layout.
@@ -1143,7 +1200,7 @@ class Orchestrator:
             )
         else:
             logger.info("Crash testcase directory: %s", output_dir / "default" / "crashes")
-        logger.info("Logs: %s", self.config["paths"]["logs"])
+        logger.info("Logs: %s", self.config.paths.logs)
 
 
 def main():
@@ -1167,14 +1224,46 @@ def main():
         default=None,
         help="Set log verbosity: 0=warnings, 1=high-level info, 2=important internals, 3=debug.",
     )
+    parser.add_argument(
+        "--force-restart",
+        action="store_true",
+        default=False,
+        help="Delete the existing AFL++ output directory and restart from scratch.",
+    )
+    parser.add_argument(
+        "--overhead-only",
+        action="store_true",
+        default=False,
+        help="Run pre-phase only and exit; records preparation overhead metrics without starting the fuzzer.",
+    )
     args = parser.parse_args()
 
     verbosity = args.verbosity
     if verbosity is None and args.verbose:
         verbosity = min(args.verbose, 3)
 
-    orchestrator = Orchestrator(args.config, verbosity=verbosity)
+    orchestrator = Orchestrator(
+        args.config,
+        verbosity=verbosity,
+        force_restart=args.force_restart,
+        overhead_only=args.overhead_only,
+    )
     orchestrator.run()
+
+
+def _parse_int(value: str) -> int | str:
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return ""
+
+
+def _parse_float_pct(value: str) -> float | str:
+    """Parse AFL++ bitmap_cvg strings like '1.23%' into a float."""
+    try:
+        return float(str(value).rstrip("%"))
+    except (ValueError, TypeError):
+        return ""
 
 
 if __name__ == "__main__":

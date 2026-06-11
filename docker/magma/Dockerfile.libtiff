@@ -1,0 +1,50 @@
+FROM aflplusplus/aflplusplus:latest
+
+RUN apt-get update && apt-get install -y \
+    autoconf \
+    automake \
+    libtool \
+    pkg-config \
+    zlib1g-dev \
+    libjpeg-dev \
+    liblzma-dev \
+    patch \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+RUN git clone https://gitlab.com/libtiff/libtiff.git /targets/libtiff && \
+    cd /targets/libtiff && git checkout c145a6c14978f73bb484c955eb9f84203efcb12e
+
+RUN mkdir -p /targets/libtiff/contrib/oss-fuzz
+COPY magma/targets/libtiff/src/tiff_read_rgba_fuzzer.cc /targets/libtiff/contrib/oss-fuzz/tiff_read_rgba_fuzzer.cc
+
+RUN mkdir -p /targets/magma/libtiff
+COPY magma/targets/libtiff/patches/ /targets/magma/libtiff/patches/
+RUN find /targets/magma/libtiff/patches/setup \
+         /targets/magma/libtiff/patches/bugs \
+         -name "*.patch" 2>/dev/null | sort | \
+    while read patch; do \
+        name=$(basename "$patch" .patch); \
+        echo "Applying $name"; \
+        sed "s/%MAGMA_BUG%/$name/g" "$patch" | patch -p1 -d /targets/libtiff; \
+    done
+
+COPY targets/magma/libtiff/Makefile /targets/magma/libtiff/Makefile
+COPY targets/magma/main_stub.cpp /targets/magma/libtiff/main_stub.cpp
+
+RUN mkdir -p /workspace/{corpus,output,mutators,distance_cache,coverage,logs,memory,instrumented,seed_code} \
+    && mkdir -p /opt/mahybridfuzz/src
+
+COPY src/ /opt/mahybridfuzz/src/
+COPY configs/ /opt/mahybridfuzz/configs/
+
+WORKDIR /opt/mahybridfuzz
+ENV PYTHONPATH=/opt/mahybridfuzz/src
+
+CMD ["python3", "src/orchestrator.py", "-c", "configs/magma/libtiff.yml"]

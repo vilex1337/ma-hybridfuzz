@@ -15,6 +15,7 @@ BFS over the resulting call graph.
 import logging
 from collections import deque
 
+from config import AppConfig
 from logging_utils import VERBOSE_LEVEL
 from pre_phase.cfg_extractor import CFGExtractor
 
@@ -24,7 +25,7 @@ logger = logging.getLogger("pre_phase.call_chain")
 class CallChainExtractor:
     DEFAULT_ENTRY_POINTS = ["main", "LLVMFuzzerTestOneInput"]
 
-    def __init__(self, config: dict):
+    def __init__(self, config: AppConfig):
         self.config = config
         self._extractor = CFGExtractor(config)
 
@@ -38,7 +39,7 @@ class CallChainExtractor:
         if entry_points is None:
             entry_points = list(self.DEFAULT_ENTRY_POINTS)
 
-        for ep in self.config.get("target", {}).get("entry_points", []):
+        for ep in self.config.target.entry_points:
             if ep not in entry_points:
                 entry_points.append(ep)
         logger.log(

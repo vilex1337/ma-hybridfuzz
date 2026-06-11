@@ -1,0 +1,63 @@
+# MA-HybridFuzz — magma/openssl x509 target
+
+logging:
+  verbosity: 2
+
+attention:
+  enabled: false
+
+target:
+  binary: "/targets/magma/openssl/x509"
+  source_dir: "/targets/openssl"
+  build_dir: "/targets/magma/openssl"
+  ir_build_dir: "/targets/magma/openssl"
+  target_function: "d2i_X509"
+  bug_type: "memory_corruption"
+  args: ["@@"]
+  program_usage: |
+    OpenSSL is a cryptographic library. The fuzzer exercises DER-encoded
+    X.509 certificate parsing via the x509 harness. Interesting inputs:
+    crafted certificate extensions, negative serial numbers, oversized
+    public keys, malformed ASN.1 sequences, and certificates with
+    circular chain references.
+
+llm:
+  provider: "cliproxy"
+  model: "gpt-5.4"
+  base_url: "http://host.docker.internal:8317/v1"
+  api_key: "sk-2FKtEdnmkEOJ5OYDWzgOgEClAoBPulYHlps76jzhgPClv"
+  max_tokens: 4096
+  temperature: 0.3
+  timeout: 600
+
+fuzzer:
+  engine: "afl++"
+  timeout: 21600
+  exec_timeout: 1000
+  memory_limit: 256
+  seed_count: 5
+  use_asan: true
+  use_ubsan: true
+  use_custom_mutator: true
+
+attention_distance:
+  server_url: "https://48b4-34-125-68-208.ngrok-free.app"
+
+scheduler:
+  attention_weight: 0.6
+  coverage_weight: 0.3
+  speed_weight: 0.1
+
+reassessment:
+  plateau_threshold: 1800
+  reassessment_coverage_rate: 0.05
+  max_reassessments: 100
+
+paths:
+  corpus: "/workspace/corpus"
+  crashes: "/workspace/output"
+  mutators: "/workspace/mutators"
+  distance_cache: "/workspace/distance_cache"
+  coverage: "/workspace/coverage"
+  logs: "/workspace/logs"
+  memory: "/workspace/memory"

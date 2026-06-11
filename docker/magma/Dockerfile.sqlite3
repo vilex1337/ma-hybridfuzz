@@ -1,0 +1,45 @@
+FROM aflplusplus/aflplusplus:latest
+
+RUN apt-get update && apt-get install -y \
+    tcl-dev \
+    python3-pip \
+    python3-venv \
+    patch \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+RUN curl -L "https://www.sqlite.org/src/tarball/sqlite.tar.gz?r=8c432642572c8c4b" \
+    -o /tmp/sqlite.tar.gz && \
+    mkdir -p /targets/sqlite3 && \
+    tar -C /targets/sqlite3 --strip-components=1 -xzf /tmp/sqlite.tar.gz && \
+    rm /tmp/sqlite.tar.gz
+
+RUN mkdir -p /targets/magma/sqlite3
+COPY magma/targets/sqlite3/patches/ /targets/magma/sqlite3/patches/
+RUN find /targets/magma/sqlite3/patches/setup \
+         /targets/magma/sqlite3/patches/bugs \
+         -name "*.patch" 2>/dev/null | sort | \
+    while read patch; do \
+        name=$(basename "$patch" .patch); \
+        echo "Applying $name"; \
+        sed "s/%MAGMA_BUG%/$name/g" "$patch" | patch -p1 -d /targets/sqlite3; \
+    done
+
+COPY targets/magma/sqlite3/Makefile /targets/magma/sqlite3/Makefile
+COPY targets/magma/main_stub.cpp /targets/magma/sqlite3/main_stub.cpp
+
+RUN mkdir -p /workspace/{corpus,output,mutators,distance_cache,coverage,logs,memory,instrumented,seed_code} \
+    && mkdir -p /opt/mahybridfuzz/src
+
+COPY src/ /opt/mahybridfuzz/src/
+COPY configs/ /opt/mahybridfuzz/configs/
+
+WORKDIR /opt/mahybridfuzz
+ENV PYTHONPATH=/opt/mahybridfuzz/src
+
+CMD ["python3", "src/orchestrator.py", "-c", "configs/magma/sqlite3.yml"]

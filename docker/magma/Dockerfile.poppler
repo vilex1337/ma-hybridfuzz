@@ -1,0 +1,56 @@
+FROM aflplusplus/aflplusplus:latest
+
+RUN apt-get update && apt-get install -y \
+    autoconf \
+    automake \
+    libtool \
+    cmake \
+    pkg-config \
+    patch \
+    libjpeg-dev \
+    zlib1g-dev \
+    libpng-dev \
+    libtiff-dev \
+    libopenjp2-7-dev \
+    liblcms2-dev \
+    libfontconfig1-dev \
+    libboost-dev \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+
+RUN git clone https://gitlab.freedesktop.org/poppler/poppler.git /targets/poppler && \
+    cd /targets/poppler && git checkout 1d23101ccebe14261c6afc024ea14f29d209e760
+
+RUN git clone https://gitlab.freedesktop.org/freetype/freetype.git /targets/freetype && \
+    cd /targets/freetype && git checkout 50d0033f7ee600c5f5831b28877353769d1f7d48
+
+RUN mkdir -p /targets/magma/poppler
+COPY magma/targets/poppler/patches/ /targets/magma/poppler/patches/
+RUN find /targets/magma/poppler/patches/bugs \
+         -name "*.patch" 2>/dev/null | sort | \
+    while read patch; do \
+        name=$(basename "$patch" .patch); \
+        echo "Applying $name"; \
+        sed "s/%MAGMA_BUG%/$name/g" "$patch" | patch -p1 -d /targets/poppler; \
+    done
+
+COPY targets/magma/poppler/Makefile /targets/magma/poppler/Makefile
+COPY targets/magma/poppler/pdf_fuzzer.cc /targets/magma/poppler/pdf_fuzzer.cc
+COPY targets/magma/main_stub.cpp /targets/magma/poppler/main_stub.cpp
+
+RUN mkdir -p /workspace/{corpus,output,mutators,distance_cache,coverage,logs,memory,instrumented,seed_code} \
+    && mkdir -p /opt/mahybridfuzz/src
+
+COPY src/ /opt/mahybridfuzz/src/
+COPY configs/ /opt/mahybridfuzz/configs/
+
+WORKDIR /opt/mahybridfuzz
+ENV PYTHONPATH=/opt/mahybridfuzz/src
+
+CMD ["python3", "src/orchestrator.py", "-c", "configs/magma/poppler.yml"]

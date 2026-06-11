@@ -49,6 +49,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from config import AppConfig
 from logging_utils import VERBOSE_LEVEL
 
 logger = logging.getLogger("pre_phase.coverage")
@@ -62,12 +63,10 @@ class CoverageChecker:
     by running a seed through an LLVM source-coverage-instrumented binary.
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: AppConfig):
         self.config = config
         self._llvm_suffix = self._detect_llvm_suffix()
-        self._cov_binary: str | None = config.get("target", {}).get(
-            "coverage_binary"
-        )  # explicit override from config
+        self._cov_binary: str | None = config.target.coverage_binary or None
         if self._cov_binary and not Path(self._cov_binary).exists():
             logger.warning(
                 "[Coverage] Configured coverage_binary not found: %s", self._cov_binary
@@ -208,7 +207,7 @@ class CoverageChecker:
             "-fcoverage-mapping",
             "-g",
             "-O0",
-            *self.config.get("target", {}).get("coverage_compile_flags", []),
+            *self.config.target.coverage_compile_flags,
         ]
 
         logger.info("[Coverage] Compiling coverage binary: %s", out_binary)
@@ -246,7 +245,7 @@ class CoverageChecker:
         seed_path = str(Path(seed_file).resolve())
 
         # Build command and determine stdin source from config args.
-        raw_args: list[str] = self.config.get("target", {}).get("args", ["@@"])
+        raw_args: list[str] = self.config.target.args
         if "@@" in raw_args:
             cmd = [cov_binary] + [seed_path if a == "@@" else a for a in raw_args]
             stdin_src = None
@@ -455,7 +454,7 @@ class CoverageChecker:
         Detect the LLVM version suffix to prefer versioned tools
         (e.g. ``-14``) over generic ones when both are present.
         """
-        for suffix in ("-18", "-17", "-16", "-15", "-14", "-13", ""):
+        for suffix in ("-20", "-19", "-18", "-17", "-16", "-15", "-14", "-13", ""):
             try:
                 r = subprocess.run(
                     ["llvm-profdata" + suffix, "--version"],

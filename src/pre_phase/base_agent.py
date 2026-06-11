@@ -13,6 +13,7 @@ import logging
 import time
 from typing import Any
 
+from config import AppConfig
 from logging_utils import VERBOSE_LEVEL
 from llm.provider import create_provider
 
@@ -28,12 +29,12 @@ class LLMAgent:
     implement their domain-specific methods.
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: AppConfig):
         self.config = config
         self.provider = create_provider(config)
         self.model = self.provider.model
-        self.max_tokens = config["llm"]["max_tokens"]
-        self.default_temperature = config["llm"].get("temperature", 0.2)
+        self.max_tokens = config.llm.max_tokens
+        self.default_temperature = config.llm.temperature
 
     # -------------------------------------------------------------------------
     # RANDLUZZ §3.1 Query Scheme
@@ -144,6 +145,10 @@ def _escape_controls_in_strings(text: str) -> str:
     escape = False
     for ch in text:
         if escape:
+            # Valid JSON escape chars: " \ / b f n r t u
+            # Any other char after \ is an invalid escape — double the backslash.
+            if ch not in ('"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u'):
+                out.append('\\')
             out.append(ch)
             escape = False
             continue

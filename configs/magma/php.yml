@@ -1,0 +1,63 @@
+# MA-HybridFuzz — magma/php php-fuzz-json target
+
+logging:
+  verbosity: 2
+
+attention:
+  enabled: false
+
+target:
+  binary: "/targets/magma/php/php-fuzz-json"
+  source_dir: "/targets/php"
+  build_dir: "/targets/magma/php"
+  ir_build_dir: "/targets/magma/php"
+  target_function: "php_json_decode_ex"
+  bug_type: "use_after_free"
+  args: ["@@"]
+  program_usage: |
+    PHP is a web scripting language. The fuzzer exercises the JSON
+    extension's decode path via php-fuzz-json. Interesting inputs:
+    deeply nested JSON arrays/objects, extremely long strings, Unicode
+    escape sequences, numbers with large exponents, duplicate keys,
+    and inputs that stress the recursion limit.
+
+llm:
+  provider: "cliproxy"
+  model: "gpt-5.4"
+  base_url: "http://host.docker.internal:8317/v1"
+  api_key: "sk-2FKtEdnmkEOJ5OYDWzgOgEClAoBPulYHlps76jzhgPClv"
+  max_tokens: 4096
+  temperature: 0.3
+  timeout: 600
+
+fuzzer:
+  engine: "afl++"
+  timeout: 21600
+  exec_timeout: 2000
+  memory_limit: 512
+  seed_count: 5
+  use_asan: true
+  use_ubsan: true
+  use_custom_mutator: true
+
+attention_distance:
+  server_url: "https://48b4-34-125-68-208.ngrok-free.app"
+
+scheduler:
+  attention_weight: 0.6
+  coverage_weight: 0.3
+  speed_weight: 0.1
+
+reassessment:
+  plateau_threshold: 1800
+  reassessment_coverage_rate: 0.05
+  max_reassessments: 100
+
+paths:
+  corpus: "/workspace/corpus"
+  crashes: "/workspace/output"
+  mutators: "/workspace/mutators"
+  distance_cache: "/workspace/distance_cache"
+  coverage: "/workspace/coverage"
+  logs: "/workspace/logs"
+  memory: "/workspace/memory"
