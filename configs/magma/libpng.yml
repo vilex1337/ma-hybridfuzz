@@ -4,7 +4,7 @@ logging:
   verbosity: 2
 
 attention:
-  enabled: false
+  enabled: true
 
 target:
   binary: "/targets/magma/libpng/libpng_read_fuzzer"
@@ -17,15 +17,15 @@ target:
   program_usage: |
     libpng is a PNG image decoding library. The fuzzer exercises the
     full read path via libpng_read_fuzzer, feeding arbitrary bytes as
-    a PNG stream. Interesting inputs: truncated IDAT chunks, corrupt
-    palette entries, invalid bit depths, interlaced images, ancillary
-    chunks (tEXt, zTXt, iTXt), and images with unusual filter types.
+    a PNG stream.
 
 llm:
-  provider: "cliproxy"
-  model: "gpt-5.4"
-  base_url: "http://host.docker.internal:8317/v1"
-  api_key: "sk-2FKtEdnmkEOJ5OYDWzgOgEClAoBPulYHlps76jzhgPClv"
+  provider: "openai"
+  model: "gpt-4o"
+  # provider: "cliproxy"
+  # model: "gpt-5.4"
+  # base_url: "http://host.docker.internal:8317/v1"
+  # api_key: "sk-2FKtEdnmkEOJ5OYDWzgOgEClAoBPulYHlps76jzhgPClv"
   max_tokens: 4096
   temperature: 0.3
   timeout: 600
@@ -41,7 +41,7 @@ fuzzer:
   use_custom_mutator: true
 
 attention_distance:
-  server_url: "https://48b4-34-125-68-208.ngrok-free.app"
+  server_url: "https://45c3-34-125-73-107.ngrok-free.app"
 
 scheduler:
   attention_weight: 0.6

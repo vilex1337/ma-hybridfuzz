@@ -26,7 +26,7 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIGS_DIR="$ROOT/configs/magma"
 
-for cfg in "$CONFIGS_DIR"/*.yml; do
+while IFS= read -r -d '' cfg; do
     changed=0
     if [[ -n "$LLM_URL" ]]; then
         sed -i "s|^\( *base_url: *\)\".*\"|\1\"$LLM_URL\"|" "$cfg"
@@ -36,8 +36,8 @@ for cfg in "$CONFIGS_DIR"/*.yml; do
         sed -i "s|^\( *server_url: *\)\".*\"|\1\"$LINEVUL_URL\"|" "$cfg"
         changed=1
     fi
-    [[ "$changed" -eq 1 ]] && echo "Updated: $(basename "$cfg")"
-done
+    [[ "$changed" -eq 1 ]] && echo "Updated: ${cfg#$ROOT/}"
+done < <(find "$CONFIGS_DIR" -name "*.yml" -print0)
 
 echo ""
 [[ -n "$LLM_URL" ]]     && echo "LLM URL:     $LLM_URL"
