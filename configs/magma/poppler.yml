@@ -4,7 +4,7 @@ logging:
   verbosity: 2
 
 attention:
-  enabled: false
+  enabled: true
 
 target:
   binary: "/targets/magma/poppler/pdf_fuzzer"
@@ -23,10 +23,12 @@ target:
     streams (compressed or uncompressed).
 
 llm:
-  provider: "cliproxy"
-  model: "gpt-5.4"
-  base_url: "http://host.docker.internal:8317/v1"
-  api_key: "sk-2FKtEdnmkEOJ5OYDWzgOgEClAoBPulYHlps76jzhgPClv"
+  provider: "openai"
+  model: "gpt-4o"
+  # provider: "cliproxy"
+  # model: "gpt-5.4"
+  # base_url: "http://host.docker.internal:8317/v1"
+  # api_key: "sk-2FKtEdnmkEOJ5OYDWzgOgEClAoBPulYHlps76jzhgPClv"
   max_tokens: 4096
   temperature: 0.3
   timeout: 600
@@ -42,7 +44,7 @@ fuzzer:
   use_custom_mutator: true
 
 attention_distance:
-  server_url: "https://48b4-34-125-68-208.ngrok-free.app"
+  server_url: "https://45c3-34-125-73-107.ngrok-free.app"
 
 scheduler:
   attention_weight: 0.6
