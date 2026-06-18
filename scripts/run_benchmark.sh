@@ -102,6 +102,7 @@ case "$FUZZER" in
             -e "MA_LLM_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
             -e "MA_LLM_MODEL=${DEEPSEEK_MODEL:-deepseek-reasoner}"
             -e "MA_LLM_API_KEY=${DEEPSEEK_API_KEY}"
+            -e "MA_LLM_MAX_TOKENS=${DEEPSEEK_MAX_TOKENS:-0}"   # 0 = no cap (R1 needs room)
         )
         ;;
     chatgpt|openai)
@@ -114,9 +115,9 @@ case "$FUZZER" in
             -e "MA_LLM_MODEL=${OPENAI_MODEL:-o4-mini}"
             -e "OPENAI_API_KEY=${OPENAI_API_KEY}"
         )
-        # Reasoning models need a larger budget so reasoning tokens don't crowd
-        # out the answer. Override MA_LLM_MAX_TOKENS if you change to gpt-4o etc.
-        PROVIDER_ENV+=( -e "MA_LLM_MAX_TOKENS=${OPENAI_MAX_TOKENS:-16000}" )
+        # Default to no output cap (0) so reasoning tokens aren't truncated and
+        # you can measure real consumption. Set OPENAI_MAX_TOKENS to a number to cap.
+        PROVIDER_ENV+=( -e "MA_LLM_MAX_TOKENS=${OPENAI_MAX_TOKENS:-0}" )
         ;;
     baseline)
         PROVIDER_ENV=()   # no LLM
