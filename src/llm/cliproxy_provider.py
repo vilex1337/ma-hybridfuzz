@@ -37,6 +37,11 @@ class ClipProxyProvider(LLMProvider):
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        if response.usage:
-            self._add_usage(response.usage.prompt_tokens, response.usage.completion_tokens)
-        return response.choices[0].message.content or ""
+        content = response.choices[0].message.content or ""
+        usage = response.usage
+        self._record_call(
+            prompt, content,
+            usage.prompt_tokens if usage else None,
+            usage.completion_tokens if usage else None,
+        )
+        return content

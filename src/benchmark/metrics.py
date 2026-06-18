@@ -88,8 +88,26 @@ class BenchmarkMetrics:
         self._wall_total_start: float = time.time()
         self._status = "ok"
 
-        log_dir = Path(config.paths.logs)
-        self._csv_path = Path(csv_path) if csv_path else log_dir / "overhead_metrics.csv"
+        # Output location & naming.
+        #   - If MA_METRICS_DIR is set (benchmark mode), write a single-row file
+        #     named  <cve>_<target>_<fuzzer>_run<id>.csv  into that (mounted)
+        #     directory. The file is rewritten on every snapshot() so partial
+        #     results survive an interrupted run, and finalised by finish().
+        #   - Otherwise keep the legacy append-mode logs/overhead_metrics.csv.
+        self._single_row = False
+        metrics_dir = os.getenv("MA_METRICS_DIR")
+        if csv_path:
+            self._csv_path = Path(csv_path)
+        elif metrics_dir:
+            cve = os.getenv("MA_CVE_ID", "").strip()
+            fuzzer = os.getenv("MA_FUZZER_LABEL", "").strip()
+            run_id = os.getenv("MA_BENCHMARK_RUN_ID", "").strip()
+            target = config.target.target_function or Path(config.target.binary).stem
+            parts = [p for p in (cve, target, fuzzer, f"run{run_id}" if run_id else "") if p]
+            self._csv_path = Path(metrics_dir) / f"{'_'.join(parts) or 'metrics'}.csv"
+            self._single_row = True
+        else:
+            self._csv_path = Path(config.paths.logs) / "overhead_metrics.csv"
         self._csv_path.parent.mkdir(parents=True, exist_ok=True)
 
     # ── Phase timing ──────────────────────────────────────────────────────────
@@ -292,12 +310,36 @@ class BenchmarkMetrics:
         self._append_csv(row)
         logger.info("[Metrics] Row written to %s", self._csv_path)
 
+    def snapshot(self, extras: dict[str, Any] | None = None) -> None:
+        """Rewrite the metrics file with the current in-progress state.
+
+        Lets partial results (TTR/TTE/coverage/crashes/tokens so far) survive a
+        run that is killed before finish(). Active only in single-row benchmark
+        mode (MA_METRICS_DIR set); a no-op otherwise.
+        """
+        if not self._single_row:
+            return
+        if extras:
+            self._extras.update(extras)
+        fz_start = self._phase_starts.get("fuzzing_loop")
+        if fz_start is not None:
+            self._extras["fuzzing_elapsed_s"] = round(time.monotonic() - fz_start, 1)
+        row = self._build_row(
+            self._phase_durations.get("static_analysis"),
+            self._phase_durations.get("llm_prephase"),
+            self.total_prep_time_s,
+            None,                       # fuzzing not finished yet
+            complete=False,
+        )
+        self._write_row(row, overwrite=True)
+
     def _build_row(
         self,
         sa: float | None,
         llm: float | None,
         total_prep: float | None,
         fuzz: float | None,
+        complete: bool = True,
     ) -> dict[str, Any]:
         row: dict[str, Any] = {
             "timestamp":              datetime.now(timezone.utc).isoformat(),
@@ -312,21 +354,39 @@ class BenchmarkMetrics:
             "overhead_pct":           _round(self.overhead_pct),
             "ttr_s":                  _round(self._timing.get("ttr_s")),
             "tte_s":                  _round(self._timing.get("tte_s")),
-            "cached":                 self._extras.pop("cached", False),
+            "cached":                 self._extras.get("cached", False),
             "status":                 self._status,
         }
-        # append any extra keys set via .set()
+        # append any extra keys set via .set() (do NOT mutate self._extras —
+        # snapshot() may be called many times over the run)
         row.update(self._extras)
+
+        # Derived token metrics: total + per-hour rates (using final fuzzing
+        # duration when complete, else the live elapsed time).
+        in_tok = _num(row.get("llm_input_tokens"))
+        out_tok = _num(row.get("llm_output_tokens"))
+        if in_tok is not None and out_tok is not None:
+            total = in_tok + out_tok
+            row["total_tokens"] = total
+            dur = fuzz if fuzz is not None else _num(self._extras.get("fuzzing_elapsed_s"))
+            hours = dur / 3600.0 if dur and dur > 0 else None
+            if hours:
+                row["input_tokens_per_hour"] = round(in_tok / hours, 2)
+                row["output_tokens_per_hour"] = round(out_tok / hours, 2)
+                row["total_tokens_per_hour"] = round(total / hours, 2)
+        row["complete"] = complete
         return row
 
     def _append_csv(self, row: dict[str, Any]) -> None:
-        write_header = not self._csv_path.exists() or self._csv_path.stat().st_size == 0
+        self._write_row(row, overwrite=self._single_row)
 
-        # Column order: base columns first, then any extras in sorted order
+    def _write_row(self, row: dict[str, Any], overwrite: bool = False) -> None:
+        # Column order: base columns first, then any extras in sorted order.
         extra_keys = sorted(k for k in row if k not in _BASE_COLUMNS)
         fieldnames = _BASE_COLUMNS + extra_keys
-
-        with open(self._csv_path, "a", newline="") as f:
+        mode = "w" if overwrite else "a"
+        write_header = overwrite or not self._csv_path.exists() or self._csv_path.stat().st_size == 0
+        with open(self._csv_path, mode, newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             if write_header:
                 writer.writeheader()
@@ -345,6 +405,16 @@ def _round(value: float | None) -> float | str:
     if value is None:
         return ""
     return round(value, 3)
+
+
+def _num(value: Any) -> float | None:
+    """Coerce a value to float, or None if not numeric/empty."""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def aggregate_runs(csv_paths: list[str | Path]) -> dict[str, Any]:

@@ -38,6 +38,10 @@ class LLMProvider(ABC):
     input_tokens: int = 0
     output_tokens: int = 0
     request_count: int = 0
+    # Number of calls whose token counts had to be estimated because the API
+    # response omitted a usage field (e.g. some cliproxy/Plus bridges). Lets the
+    # benchmark flag a run whose token totals are approximate rather than exact.
+    estimated_calls: int = 0
 
     @abstractmethod
     def generate(
@@ -53,12 +57,37 @@ class LLMProvider(ABC):
         self.output_tokens += output_tokens
         self.request_count += 1
 
+    def _record_call(
+        self,
+        prompt: str,
+        response_text: str,
+        input_tokens: int | None,
+        output_tokens: int | None,
+    ) -> None:
+        """Always count the request; estimate tokens when the API omits usage.
+
+        Estimation is a crude chars/4 heuristic and cannot recover hidden
+        reasoning tokens — it only keeps the totals non-zero and the request
+        count exact. Estimated calls are tallied in ``estimated_calls``.
+        """
+        if input_tokens is None or output_tokens is None:
+            input_tokens = estimate_tokens(prompt)
+            output_tokens = estimate_tokens(response_text)
+            self.estimated_calls += 1
+        self._add_usage(input_tokens, output_tokens)
+
     def usage_summary(self) -> dict:
         return {
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "request_count": self.request_count,
+            "estimated_calls": self.estimated_calls,
         }
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate (~4 chars/token) for when usage is unavailable."""
+    return max(1, len(text or "") // 4)
 
 
 # Known-good model IDs per provider. Users may specify other IDs at their own risk;
@@ -78,6 +107,10 @@ SUPPORTED_MODELS: dict[str, set[str]] = {
         "gpt-4o-mini",
         "o1",
         "o1-mini",
+        "o3",
+        "o3-mini",
+        "o4",
+        "o4-mini",
     },
     "gemini": {
         "gemini-2.5-pro",

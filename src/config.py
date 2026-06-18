@@ -8,7 +8,17 @@ single entry point: call it once in Orchestrator and pass it everywhere.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+
+
+def _env(*names: str) -> str | None:
+    """Return the first non-empty environment variable among *names*."""
+    for name in names:
+        val = os.getenv(name)
+        if val:
+            return val
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -29,13 +39,19 @@ class LLMConfig:
 
     @classmethod
     def from_dict(cls, raw: dict) -> "LLMConfig":
+        # Environment overrides let one config set drive every fuzzer variant
+        # (deepseek / chatgpt / ...) without editing per-CVE YAML files. The
+        # benchmark script injects MA_LLM_* per fuzzer. See docs/BENCHMARK_VM.md.
+        provider = _env("MA_LLM_PROVIDER") or raw.get("provider", "anthropic")
         return cls(
-            provider=raw.get("provider", "anthropic").lower(),
-            model=raw["model"],
-            max_tokens=int(raw["max_tokens"]),
+            provider=provider.lower(),
+            model=_env("MA_LLM_MODEL") or raw["model"],
+            # Reasoning models (o4-mini, ...) spend part of the budget on hidden
+            # reasoning tokens, so a larger max may be needed for a usable answer.
+            max_tokens=int(_env("MA_LLM_MAX_TOKENS") or raw["max_tokens"]),
             temperature=float(raw.get("temperature", 0.2)),
-            base_url=raw.get("base_url", ""),
-            api_key=raw.get("api_key", ""),
+            base_url=_env("MA_LLM_BASE_URL") or raw.get("base_url", ""),
+            api_key=_env("MA_LLM_API_KEY") or raw.get("api_key", ""),
             timeout=int(raw.get("timeout", 300)),
             use_chat=bool(raw.get("use_chat", True)),
             sid=raw.get("sid", ""),
@@ -98,9 +114,12 @@ class FuzzerConfig:
 
     @classmethod
     def from_dict(cls, raw: dict) -> "FuzzerConfig":
+        # MA_FUZZER_TIMEOUT lets the benchmark script shorten runs for smoke
+        # tests without touching the 6h (21600s) value in the configs.
+        timeout = int(_env("MA_FUZZER_TIMEOUT") or raw["timeout"])
         return cls(
             engine=raw.get("engine", "afl++"),
-            timeout=int(raw["timeout"]),
+            timeout=timeout,
             exec_timeout=int(raw["exec_timeout"]),
             memory_limit=int(raw["memory_limit"]),
             seed_count=int(raw.get("seed_count", 5)),
@@ -141,9 +160,16 @@ class AttentionConfig:
 
     @classmethod
     def from_dict(cls, attention_raw: dict, attention_distance_raw: dict) -> "AttentionConfig":
+        enabled = bool(attention_raw.get("enabled", True))
+        env_enabled = _env("MA_ATTENTION_ENABLED")
+        if env_enabled is not None:
+            enabled = env_enabled.strip().lower() in ("1", "true", "yes", "on")
+        # LineVul now runs locally on CPU by default, so the stale ngrok URLs
+        # committed in configs/magma/**.yml are intentionally ignored. Set
+        # MA_LINEVUL_SERVER_URL only if you want the legacy remote server.
         return cls(
-            enabled=bool(attention_raw.get("enabled", True)),
-            server_url=attention_distance_raw.get("server_url", ""),
+            enabled=enabled,
+            server_url=_env("MA_LINEVUL_SERVER_URL") or "",
             sid=attention_distance_raw.get("sid", ""),
         )
 
