@@ -176,3 +176,60 @@ services:
     security_opt:
       - seccomp:unconfined
     command: ["python3", "/opt/mahybridfuzz/src/orchestrator.py", "-c", "configs/magma/php.yml"]
+
+  # --- AFLGo baseline (see scripts/run_baseline.sh) ---
+  # Each image bakes in a two-pass AFLGo build targeting the function set by
+  # TARGET_FUNCTION; rebuild whenever the target CVE/function changes.
+  magma-aflgo-base:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.aflgo-base
+    image: ma-hybridfuzz-aflgo-base:latest
+
+  magma-aflgo-libpng:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.aflgo-libpng
+      args:
+        TARGET_FUNCTION: ${AFLGO_TARGET_FUNCTION:-}
+        CVE_ID: ${AFLGO_CVE_ID:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - MEMORY_LIMIT=${AFLGO_MEMORY_LIMIT:-256}
+      - EXEC_TIMEOUT=${AFLGO_EXEC_TIMEOUT:-1000}
+      - RUN_TIMEOUT=${AFLGO_RUN_TIMEOUT:-21600}
+      - CUTOFF=${AFLGO_CUTOFF:-30m}
+
+  magma-aflgo-libtiff:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.aflgo-libtiff
+      args:
+        TARGET_FUNCTION: ${AFLGO_TARGET_FUNCTION:-}
+        CVE_ID: ${AFLGO_CVE_ID:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - MEMORY_LIMIT=${AFLGO_MEMORY_LIMIT:-256}
+      - EXEC_TIMEOUT=${AFLGO_EXEC_TIMEOUT:-1000}
+      - RUN_TIMEOUT=${AFLGO_RUN_TIMEOUT:-21600}
+      - CUTOFF=${AFLGO_CUTOFF:-30m}
+
+  magma-aflgo-libxml2:
+    build:
+      context: .
+      dockerfile: docker/magma/Dockerfile.aflgo-libxml2
+      args:
+        TARGET_FUNCTION: ${AFLGO_TARGET_FUNCTION:-}
+        CVE_ID: ${AFLGO_CVE_ID:-}
+    privileged: true
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - MEMORY_LIMIT=${AFLGO_MEMORY_LIMIT:-256}
+      - EXEC_TIMEOUT=${AFLGO_EXEC_TIMEOUT:-1000}
+      - RUN_TIMEOUT=${AFLGO_RUN_TIMEOUT:-21600}
+      - CUTOFF=${AFLGO_CUTOFF:-30m}

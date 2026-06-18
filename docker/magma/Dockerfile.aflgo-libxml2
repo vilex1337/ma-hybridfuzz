@@ -1,0 +1,69 @@
+# MA-HybridFuzz — AFLGo baseline for the libxml2/libxml2_xml_read_memory_fuzzer Magma target.
+# Two-pass AFLGo build: (1) instrument + compute target distances for
+# TARGET_FUNCTION, (2) rebuild with distance-guided instrumentation.
+
+FROM ma-hybridfuzz-aflgo-base:latest
+
+ARG TARGET_FUNCTION
+ARG CVE_ID=unset
+RUN test -n "$TARGET_FUNCTION" || (echo "TARGET_FUNCTION build-arg is required" && exit 1)
+
+RUN apt-get update && apt-get install -y zlib1g-dev liblzma-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://gitlab.gnome.org/GNOME/libxml2.git /targets/libxml2 && \
+    cd /targets/libxml2 && git checkout ec6e3efb06d7b15cf5a2328fabd3845acea4c815
+
+RUN mkdir -p /targets/magma/libxml2
+COPY magma/targets/libxml2/patches/ /targets/magma/libxml2/patches/
+RUN find /targets/magma/libxml2/patches/setup \
+         /targets/magma/libxml2/patches/bugs \
+         -name "*.patch" 2>/dev/null | sort | \
+    while read patch; do \
+        name=$(basename "$patch" .patch); \
+        echo "Applying $name"; \
+        sed "s/%MAGMA_BUG%/$name/g" "$patch" | patch -p1 -d /targets/libxml2; \
+    done
+
+COPY targets/magma/libxml2/Makefile /targets/magma/libxml2/Makefile
+COPY targets/magma/main_stub.cpp /targets/magma/libxml2/main_stub.cpp
+COPY magma/targets/libxml2/src/libxml2_xml_read_memory_fuzzer.cc /targets/magma/libxml2/libxml2_xml_read_memory_fuzzer.cc
+COPY magma/targets/libxml2/src/FuzzedDataProvider.h /targets/magma/libxml2/FuzzedDataProvider.h
+COPY magma/targets/libxml2/src/fuzzer_temp_file.h /targets/magma/libxml2/fuzzer_temp_file.h
+COPY scripts/aflgo/find_function_range.py /opt/aflgo-scripts/find_function_range.py
+COPY docker/magma/aflgo-run.sh /usr/local/bin/aflgo-run.sh
+RUN chmod +x /usr/local/bin/aflgo-run.sh
+
+ENV TMP_DIR=/aflgo/temp
+ENV BINARY=/targets/magma/libxml2/libxml2_xml_read_memory_fuzzer
+ENV SEED_DIR=/aflgo/seeds
+RUN mkdir -p "$TMP_DIR" "$SEED_DIR"
+COPY magma/targets/libxml2/corpus/libxml2_xml_read_memory_fuzzer/ /aflgo/seeds/
+
+# --- Pass 1: temp instrumentation, locate target lines, compute distances ---
+RUN python3 /opt/aflgo-scripts/find_function_range.py /targets/libxml2 "$TARGET_FUNCTION" \
+        > "$TMP_DIR/BBtargets.txt" && \
+    test -s "$TMP_DIR/BBtargets.txt" && \
+    export CC="$AFLGO/afl-clang-fast" CXX="$AFLGO/afl-clang-fast++" && \
+    export AR=llvm-ar-4.0 RANLIB=llvm-ranlib-4.0 && \
+    export ADDITIONAL="-targets=$TMP_DIR/BBtargets.txt -outdir=$TMP_DIR -flto -fuse-ld=gold -Wl,-plugin-opt=save-temps" && \
+    export CFLAGS="$ADDITIONAL" CXXFLAGS="$ADDITIONAL" && \
+    (make -C /targets/magma/libxml2 clean || true) && \
+    make -C /targets/magma/libxml2 all && \
+    cat "$TMP_DIR/BBnames.txt" | rev | cut -d: -f2- | rev | sort | uniq > "$TMP_DIR/BBnames2.txt" && \
+    mv "$TMP_DIR/BBnames2.txt" "$TMP_DIR/BBnames.txt" && \
+    cat "$TMP_DIR/BBcalls.txt" | sort | uniq > "$TMP_DIR/BBcalls2.txt" && \
+    mv "$TMP_DIR/BBcalls2.txt" "$TMP_DIR/BBcalls.txt" && \
+    test -s "$TMP_DIR/Ftargets.txt" && \
+    "$AFLGO/scripts/genDistance.sh" /targets/magma/libxml2 "$TMP_DIR" libxml2_xml_read_memory_fuzzer && \
+    test -s "$TMP_DIR/distance.cfg.txt"
+
+# --- Pass 2: final distance-guided instrumentation ---
+RUN export CC="$AFLGO/afl-clang-fast" CXX="$AFLGO/afl-clang-fast++" && \
+    export AR=llvm-ar-4.0 RANLIB=llvm-ranlib-4.0 && \
+    export CFLAGS="-distance=$TMP_DIR/distance.cfg.txt" CXXFLAGS="-distance=$TMP_DIR/distance.cfg.txt" && \
+    make -C /targets/magma/libxml2 clean && \
+    make -C /targets/magma/libxml2 all
+
+ENV OUT_DIR=/aflgo-out
+CMD ["/usr/local/bin/aflgo-run.sh"]
