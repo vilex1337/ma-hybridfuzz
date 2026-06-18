@@ -1,0 +1,78 @@
+# MA-HybridFuzz — AFLGo baseline for the libtiff/tiff_read_rgba_fuzzer Magma target.
+# Two-pass AFLGo build: (1) instrument + compute target distances for
+# TARGET_FUNCTION, (2) rebuild with distance-guided instrumentation.
+
+FROM ma-hybridfuzz-aflgo-base:latest
+
+ARG TARGET_FUNCTION
+ARG CVE_ID=unset
+RUN test -n "$TARGET_FUNCTION" || (echo "TARGET_FUNCTION build-arg is required" && exit 1)
+
+RUN apt-get update && apt-get install -y zlib1g-dev libjpeg-dev liblzma-dev wget && \
+    rm -rf /var/lib/apt/lists/*
+
+# Xenial's libzstd-dev is 0.5.1, too old for libtiff's zstd codec; build a
+# modern release from source instead.
+RUN cd /tmp && wget -q https://github.com/facebook/zstd/releases/download/v1.4.8/zstd-1.4.8.tar.gz && \
+    tar xzf zstd-1.4.8.tar.gz && \
+    make -C zstd-1.4.8 -j"$(nproc)" install PREFIX=/usr/local && \
+    cd / && rm -rf /tmp/zstd-1.4.8*
+ENV LD_LIBRARY_PATH=/usr/local/lib
+ENV LIBRARY_PATH=/usr/local/lib
+
+RUN git clone https://gitlab.com/libtiff/libtiff.git /targets/libtiff && \
+    cd /targets/libtiff && git checkout c145a6c14978f73bb484c955eb9f84203efcb12e
+
+RUN mkdir -p /targets/libtiff/contrib/oss-fuzz
+COPY magma/targets/libtiff/src/tiff_read_rgba_fuzzer.cc /targets/libtiff/contrib/oss-fuzz/tiff_read_rgba_fuzzer.cc
+
+RUN mkdir -p /targets/magma/libtiff
+COPY magma/targets/libtiff/patches/ /targets/magma/libtiff/patches/
+RUN find /targets/magma/libtiff/patches/setup \
+         /targets/magma/libtiff/patches/bugs \
+         -name "*.patch" 2>/dev/null | sort | \
+    while read patch; do \
+        name=$(basename "$patch" .patch); \
+        echo "Applying $name"; \
+        sed "s/%MAGMA_BUG%/$name/g" "$patch" | patch -p1 -d /targets/libtiff; \
+    done
+
+COPY targets/magma/libtiff/Makefile /targets/magma/libtiff/Makefile
+COPY targets/magma/main_stub.cpp /targets/magma/libtiff/main_stub.cpp
+COPY scripts/aflgo/find_function_range.py /opt/aflgo-scripts/find_function_range.py
+COPY docker/magma/aflgo-run.sh /usr/local/bin/aflgo-run.sh
+RUN chmod +x /usr/local/bin/aflgo-run.sh
+
+ENV TMP_DIR=/aflgo/temp
+ENV BINARY=/targets/magma/libtiff/tiff_read_rgba_fuzzer
+ENV SEED_DIR=/aflgo/seeds
+RUN mkdir -p "$TMP_DIR" "$SEED_DIR"
+COPY magma/targets/libtiff/corpus/tiff_read_rgba_fuzzer/ /aflgo/seeds/
+
+# --- Pass 1: temp instrumentation, locate target lines, compute distances ---
+RUN python3 /opt/aflgo-scripts/find_function_range.py /targets/libtiff "$TARGET_FUNCTION" \
+        > "$TMP_DIR/BBtargets.txt" && \
+    test -s "$TMP_DIR/BBtargets.txt" && \
+    export CC="$AFLGO/afl-clang-fast" CXX="$AFLGO/afl-clang-fast++" && \
+    export AR=llvm-ar-4.0 RANLIB=llvm-ranlib-4.0 && \
+    export ADDITIONAL="-targets=$TMP_DIR/BBtargets.txt -outdir=$TMP_DIR -flto -fuse-ld=gold -Wl,-plugin-opt=save-temps" && \
+    export CFLAGS="$ADDITIONAL" CXXFLAGS="$ADDITIONAL" && \
+    (make -C /targets/magma/libtiff clean || true) && \
+    make -C /targets/magma/libtiff all && \
+    cat "$TMP_DIR/BBnames.txt" | rev | cut -d: -f2- | rev | sort | uniq > "$TMP_DIR/BBnames2.txt" && \
+    mv "$TMP_DIR/BBnames2.txt" "$TMP_DIR/BBnames.txt" && \
+    cat "$TMP_DIR/BBcalls.txt" | sort | uniq > "$TMP_DIR/BBcalls2.txt" && \
+    mv "$TMP_DIR/BBcalls2.txt" "$TMP_DIR/BBcalls.txt" && \
+    test -s "$TMP_DIR/Ftargets.txt" && \
+    "$AFLGO/scripts/genDistance.sh" /targets/magma/libtiff "$TMP_DIR" tiff_read_rgba_fuzzer && \
+    test -s "$TMP_DIR/distance.cfg.txt"
+
+# --- Pass 2: final distance-guided instrumentation ---
+RUN export CC="$AFLGO/afl-clang-fast" CXX="$AFLGO/afl-clang-fast++" && \
+    export AR=llvm-ar-4.0 RANLIB=llvm-ranlib-4.0 && \
+    export CFLAGS="-distance=$TMP_DIR/distance.cfg.txt" CXXFLAGS="-distance=$TMP_DIR/distance.cfg.txt" && \
+    make -C /targets/magma/libtiff clean && \
+    make -C /targets/magma/libtiff all
+
+ENV OUT_DIR=/aflgo-out
+CMD ["/usr/local/bin/aflgo-run.sh"]

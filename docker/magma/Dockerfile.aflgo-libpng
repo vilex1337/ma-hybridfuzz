@@ -1,0 +1,65 @@
+# MA-HybridFuzz — AFLGo baseline for the libpng/libpng_read_fuzzer Magma target.
+# Two-pass AFLGo build: (1) instrument + compute target distances for
+# TARGET_FUNCTION, (2) rebuild with distance-guided instrumentation.
+
+FROM ma-hybridfuzz-aflgo-base:latest
+
+ARG TARGET_FUNCTION
+ARG CVE_ID=unset
+RUN test -n "$TARGET_FUNCTION" || (echo "TARGET_FUNCTION build-arg is required" && exit 1)
+
+RUN apt-get update && apt-get install -y zlib1g-dev && rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/glennrp/libpng.git /targets/libpng && \
+    cd /targets/libpng && git checkout a37d4836519517bdce6cb9d956092321eca3e73b
+
+RUN mkdir -p /targets/magma/libpng
+COPY magma/targets/libpng/patches/ /targets/magma/libpng/patches/
+RUN find /targets/magma/libpng/patches/setup \
+         /targets/magma/libpng/patches/bugs \
+         -name "*.patch" 2>/dev/null | sort | \
+    while read patch; do \
+        name=$(basename "$patch" .patch); \
+        echo "Applying $name"; \
+        sed "s/%MAGMA_BUG%/$name/g" "$patch" | patch -p1 -d /targets/libpng; \
+    done
+
+COPY targets/magma/libpng/Makefile /targets/magma/libpng/Makefile
+COPY targets/magma/main_stub.cpp /targets/magma/libpng/main_stub.cpp
+COPY scripts/aflgo/find_function_range.py /opt/aflgo-scripts/find_function_range.py
+COPY docker/magma/aflgo-run.sh /usr/local/bin/aflgo-run.sh
+RUN chmod +x /usr/local/bin/aflgo-run.sh
+
+ENV TMP_DIR=/aflgo/temp
+ENV BINARY=/targets/magma/libpng/libpng_read_fuzzer
+ENV SEED_DIR=/aflgo/seeds
+RUN mkdir -p "$TMP_DIR" "$SEED_DIR"
+COPY magma/targets/libpng/corpus/libpng_read_fuzzer/ /aflgo/seeds/
+
+# --- Pass 1: temp instrumentation, locate target lines, compute distances ---
+RUN python3 /opt/aflgo-scripts/find_function_range.py /targets/libpng "$TARGET_FUNCTION" \
+        > "$TMP_DIR/BBtargets.txt" && \
+    test -s "$TMP_DIR/BBtargets.txt" && \
+    export CC="$AFLGO/afl-clang-fast" CXX="$AFLGO/afl-clang-fast++" && \
+    export AR=llvm-ar-4.0 RANLIB=llvm-ranlib-4.0 && \
+    export ADDITIONAL="-targets=$TMP_DIR/BBtargets.txt -outdir=$TMP_DIR -flto -fuse-ld=gold -Wl,-plugin-opt=save-temps" && \
+    export CFLAGS="$ADDITIONAL" CXXFLAGS="$ADDITIONAL" && \
+    (make -C /targets/magma/libpng clean || true) && \
+    make -C /targets/magma/libpng all && \
+    cat "$TMP_DIR/BBnames.txt" | rev | cut -d: -f2- | rev | sort | uniq > "$TMP_DIR/BBnames2.txt" && \
+    mv "$TMP_DIR/BBnames2.txt" "$TMP_DIR/BBnames.txt" && \
+    cat "$TMP_DIR/BBcalls.txt" | sort | uniq > "$TMP_DIR/BBcalls2.txt" && \
+    mv "$TMP_DIR/BBcalls2.txt" "$TMP_DIR/BBcalls.txt" && \
+    test -s "$TMP_DIR/Ftargets.txt" && \
+    "$AFLGO/scripts/genDistance.sh" /targets/magma/libpng "$TMP_DIR" libpng_read_fuzzer && \
+    test -s "$TMP_DIR/distance.cfg.txt"
+
+# --- Pass 2: final distance-guided instrumentation ---
+RUN export CC="$AFLGO/afl-clang-fast" CXX="$AFLGO/afl-clang-fast++" && \
+    export AR=llvm-ar-4.0 RANLIB=llvm-ranlib-4.0 && \
+    export CFLAGS="-distance=$TMP_DIR/distance.cfg.txt" CXXFLAGS="-distance=$TMP_DIR/distance.cfg.txt" && \
+    make -C /targets/magma/libpng clean && \
+    make -C /targets/magma/libpng all
+
+ENV OUT_DIR=/aflgo-out
+CMD ["/usr/local/bin/aflgo-run.sh"]
