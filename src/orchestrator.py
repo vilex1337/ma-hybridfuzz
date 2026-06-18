@@ -31,12 +31,18 @@ logger = logging.getLogger("orchestrator")
 
 
 class Orchestrator:
-    def __init__(self, config_path: str, verbosity: int | None = None, force_restart: bool = False, overhead_only: bool = False):
+    def __init__(self, config_path: str, verbosity: int | None = None, force_restart: bool = False, overhead_only: bool = False, baseline: bool = False):
         with open(config_path) as f:
             _raw = yaml.safe_load(f)
 
         self._force_restart = force_restart
         self._overhead_only = overhead_only
+        self._baseline = baseline
+        if baseline:
+            # Plain AFL++ baseline: no LLM, no directed guidance. Seeds come from
+            # the Magma corpus. Metrics (TTR/TTE/coverage/crashes) are collected
+            # exactly as for the LLM fuzzers for a like-for-like comparison.
+            _raw.setdefault("attention", {})["enabled"] = False
 
         self.session_id = self._resolve_session_id(config_path, _raw)
         _raw["inference_session_id"] = self.session_id
@@ -58,11 +64,19 @@ class Orchestrator:
             log_dir / "orchestrator.log",
         )
 
-        self.reasoning = ReasoningAgent(self.config)
-        self.reassessment = ReassessmentAgent(self.config)
+        # LLM-backed agents are only constructed when not in baseline mode, so
+        # the baseline never needs an API key / provider.
+        if baseline:
+            self.reasoning = None
+            self.reassessment = None
+            self.seed_gen = None
+            self.mutator_gen = None
+        else:
+            self.reasoning = ReasoningAgent(self.config)
+            self.reassessment = ReassessmentAgent(self.config)
+            self.seed_gen = SeedGenerator(self.config)
+            self.mutator_gen = MutatorGenerator(self.config)
         self.memory = PersistentMemory(self.config)
-        self.seed_gen = SeedGenerator(self.config)
-        self.mutator_gen = MutatorGenerator(self.config)
         self.attention = AttentionDistanceComputer(self.config)
         self.call_chain = CallChainExtractor(self.config)
         self.coverage_checker = CoverageChecker(self.config)
@@ -289,6 +303,19 @@ class Orchestrator:
             raise
 
         self.metrics.end_phase("static_analysis")
+
+        # ── Baseline (plain AFL++): no LLM pre-phase ──────────────────────────
+        # Seed straight from the Magma corpus and skip bug-info / seed / mutator
+        # generation entirely. FCC + coverage binary were still built above so
+        # TTR can be measured identically to the LLM fuzzers.
+        if self._baseline:
+            self._seed_corpus_for_baseline()
+            self._pre_phase_ctx = {
+                "fcc": fcc,
+                "target_function": target_function,
+            }
+            logger.info("[Baseline] Pre-phase complete (no LLM); seeded from Magma corpus.")
+            return
 
         def _corpus_has_seed():
             corpus_dir = Path(self.config.paths.corpus)
@@ -805,6 +832,37 @@ target_function: str,
 
         return {"declaration": "", "body": "", "key_lines": []}
 
+    def _seed_corpus_for_baseline(self):
+        """Populate the corpus for the plain-AFL baseline.
+
+        Copies the Magma seed corpus from ``MA_BASELINE_SEED_DIR`` (mounted by
+        the benchmark script) into the configured corpus dir. Falls back to a
+        single minimal seed so afl-fuzz always has at least one input.
+        """
+        import shutil
+
+        corpus = Path(self.config.paths.corpus)
+        corpus.mkdir(parents=True, exist_ok=True)
+        seed_dir = os.getenv("MA_BASELINE_SEED_DIR", "")
+        copied = 0
+        if seed_dir and Path(seed_dir).is_dir():
+            for src in Path(seed_dir).iterdir():
+                if src.is_file():
+                    try:
+                        shutil.copy(src, corpus / src.name)
+                        copied += 1
+                    except OSError as exc:
+                        logger.debug("[Baseline] Could not copy seed %s: %s", src, exc)
+            logger.info("[Baseline] Copied %d Magma seeds from %s", copied, seed_dir)
+        else:
+            logger.warning(
+                "[Baseline] MA_BASELINE_SEED_DIR unset or missing (%r); "
+                "using a single minimal seed.", seed_dir,
+            )
+        if copied == 0 and not any(p.is_file() for p in corpus.iterdir()):
+            (corpus / "seed_0").write_bytes(b"\x00")
+            logger.info("[Baseline] Wrote minimal fallback seed.")
+
     def _run_fuzzing_loop(self):
         if self._instrumented_binary is None:
             raise RuntimeError("Instrumented binary not built — pre-phase must run first")
@@ -856,6 +914,11 @@ target_function: str,
         prev_coverage = 0
         start_time = time.time()
         last_stats: dict | None = None
+        # Periodically flush a durable metrics snapshot so partial results
+        # survive a hard kill / reboot. Interval configurable (default 60s).
+        snapshot_interval = int(os.getenv("MA_SNAPSHOT_INTERVAL", "60"))
+        last_snapshot = 0.0
+        self._write_live_snapshot(None, 0.0)   # emit a row immediately
         logger.log(
             VERBOSE_LEVEL,
             "[Fuzzing] Reassessment policy: plateau_threshold=%ss coverage_rate=%.4f max_reassessments=%d",
@@ -895,6 +958,11 @@ target_function: str,
                     elapsed_s=elapsed,
                 )
 
+            # ── Durable metrics snapshot (survives interruption) ──────────────
+            if time.time() - last_snapshot >= snapshot_interval:
+                self._write_live_snapshot(stats, elapsed)
+                last_snapshot = time.time()
+
             # ── Persistent Memory: snapshot coverage every poll cycle ─────────
             self.memory.record_coverage_snapshot(stats)
 
@@ -924,7 +992,7 @@ target_function: str,
                 current_coverage,
                 coverage_increase_rate * 100,
             )
-            if plateau_time >= plateau_threshold:
+            if not self._baseline and plateau_time >= plateau_threshold:
                 if (
                     coverage_increase_rate < reassessment_coverage_rate
                 ):
@@ -973,8 +1041,48 @@ target_function: str,
             return 1.0 if current > 0 else 0.0
         return max(current - previous, 0) / previous
 
+    def _provider_instances(self) -> list:
+        return [
+            getattr(self.reasoning, "provider", None),
+            getattr(self.reassessment, "provider", None),
+            getattr(self.mutator_gen, "provider", None),
+            getattr(self.seed_gen, "_provider", None),
+        ]
+
+    def _collect_token_usage(self) -> tuple[int, int, int]:
+        """Return (requests, input_tokens, output_tokens) accumulated so far.
+
+        Reads the in-process provider counters, so it is cheap and safe to call
+        repeatedly (used by the periodic live snapshot). Baseline → (0, 0, 0).
+        """
+        if self._baseline:
+            return (0, 0, 0)
+        insts = [p for p in self._provider_instances() if p is not None]
+        return (
+            sum(p.request_count for p in insts),
+            sum(p.input_tokens for p in insts),
+            sum(p.output_tokens for p in insts),
+        )
+
+    def _write_live_snapshot(self, stats: dict, elapsed: float) -> None:
+        """Flush an in-progress metrics row so partial results survive a kill."""
+        req, in_tok, out_tok = self._collect_token_usage()
+        self.metrics.snapshot({
+            "unique_crashes":    stats.get("unique_crashes", 0) if stats else 0,
+            "edges_found":       _parse_int(stats.get("edges_found", "")) if stats else "",
+            "bitmap_cvg":        _parse_float_pct(stats.get("bitmap_cvg", "")) if stats else "",
+            "llm_requests":      req,
+            "llm_input_tokens":  in_tok,
+            "llm_output_tokens": out_tok,
+        })
+
     def _fetch_inference_metrics(self):
         """Collect LLM token usage and request count; log and save to benchmark metrics."""
+        if self._baseline:
+            self.metrics.set("llm_requests", 0)
+            self.metrics.set("llm_input_tokens", 0)
+            self.metrics.set("llm_output_tokens", 0)
+            return
         provider_name = self.config.llm.provider
 
         if provider_name == "self_hosted":
@@ -994,15 +1102,18 @@ target_function: str,
                 return
         else:
             # Sum usage counters accumulated by each provider instance.
-            provider_instances = [
-                getattr(self.reasoning, "provider", None),
-                getattr(self.reassessment, "provider", None),
-                getattr(self.mutator_gen, "provider", None),
-                getattr(self.seed_gen, "_provider", None),
-            ]
-            requests_made = sum(p.request_count for p in provider_instances if p is not None)
-            input_tokens = sum(p.input_tokens for p in provider_instances if p is not None)
-            output_tokens = sum(p.output_tokens for p in provider_instances if p is not None)
+            provider_instances = self._provider_instances()
+            requests_made, input_tokens, output_tokens = self._collect_token_usage()
+            estimated_calls = sum(
+                getattr(p, "estimated_calls", 0) for p in provider_instances if p is not None
+            )
+            self.metrics.set("llm_estimated_calls", estimated_calls)
+            if estimated_calls:
+                logger.warning(
+                    "[Metrics] %d/%d LLM calls had no usage field; their tokens are "
+                    "ESTIMATED (chars/4). Token totals are approximate for this run.",
+                    estimated_calls, requests_made,
+                )
 
         logger.info("=== Inference Metrics (%s) ===", self.session_id)
         logger.info("Requests made:       %s", requests_made)
@@ -1236,6 +1347,12 @@ def main():
         default=False,
         help="Run pre-phase only and exit; records preparation overhead metrics without starting the fuzzer.",
     )
+    parser.add_argument(
+        "--baseline",
+        action="store_true",
+        default=False,
+        help="Plain AFL++ baseline: no LLM, no attention guidance, seed from the Magma corpus. Collects the same metrics for comparison.",
+    )
     args = parser.parse_args()
 
     verbosity = args.verbosity
@@ -1247,6 +1364,7 @@ def main():
         verbosity=verbosity,
         force_restart=args.force_restart,
         overhead_only=args.overhead_only,
+        baseline=args.baseline,
     )
     orchestrator.run()
 

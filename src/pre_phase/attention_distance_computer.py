@@ -133,6 +133,10 @@ class AttentionDistanceComputer:
         self._write_cache()
         logger.info("Attention distances cached at %s", self.cache_dir)
 
+        # The model is no longer needed — the 6h fuzzing loop reads the cached
+        # distances from disk. Free ~1GB so parallel runs fit on small VMs.
+        self._scorer.release()
+
     def load_cached(self) -> dict:
         """Load pre-computed distances. Returns dict usable by AttentionScheduler."""
         cache_path = self.cache_dir / "attention_distances.pkl"
