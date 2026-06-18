@@ -31,12 +31,16 @@ class ClipProxyProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.3,
     ) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        kwargs: dict = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+        }
+        # max_tokens <= 0 ⇒ omit the cap (model default; avoids truncating
+        # reasoning models like deepseek-reasoner and measures real usage).
+        if max_tokens and max_tokens > 0:
+            kwargs["max_tokens"] = max_tokens
+        response = self.client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content or ""
         usage = response.usage
         self._record_call(

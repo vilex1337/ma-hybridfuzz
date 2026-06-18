@@ -69,8 +69,11 @@ Fill in `.env`:
 Both LLM fuzzers call real APIs directly — no proxy server, no browser login.
 Just put the keys in `.env`. The script preflight-checks that the relevant key
 is set before launching. Set `OPENAI_MODEL` to the exact model id your key
-supports (e.g. `o4-mini`, `o4`, `gpt-4o`); reasoning models default to a 16000
-token budget (`OPENAI_MAX_TOKENS`) so reasoning tokens don't crowd out the answer.
+supports (e.g. `o4-mini`, `o4`, `gpt-4o`). Output is **uncapped by default**
+(`OPENAI_MAX_TOKENS=0` / `DEEPSEEK_MAX_TOKENS=0`) so reasoning tokens aren't
+truncated and you can measure real consumption; set those to a number to cap
+per-call output length. Token totals are recorded from each API response either
+way — the cap only bounds output length, not measurement.
 
 ## 3. Run
 

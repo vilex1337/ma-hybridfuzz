@@ -43,11 +43,16 @@ class OpenAIProvider(LLMProvider):
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
         }
+        # max_tokens <= 0 means "no explicit cap" — omit the param so the model
+        # uses its own default ceiling (useful to measure natural consumption and
+        # to avoid truncating reasoning-model output).
         if is_reasoning_model:
             # Reasoning models: no temperature support, use max_completion_tokens.
-            kwargs["max_completion_tokens"] = max_tokens
+            if max_tokens and max_tokens > 0:
+                kwargs["max_completion_tokens"] = max_tokens
         else:
-            kwargs["max_tokens"] = max_tokens
+            if max_tokens and max_tokens > 0:
+                kwargs["max_tokens"] = max_tokens
             kwargs["temperature"] = temperature
 
         response = self.client.chat.completions.create(**kwargs)
