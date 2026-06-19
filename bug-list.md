@@ -32,9 +32,38 @@ _Format : CVE name: Description - class_
 
 4. CVE-2016-1836: Use-after-free vulnerability in the xmlDictComputeFastKey function in libxml2  allows remote attackers to cause a denial of service via a crafted XML document - Use after free.
 
-----
-To be added
 ## Poppler
+1. CVE-2019-14494: An issue was discovered in Poppler through 0.78.0. There is a divide-by-zero error in the function SplashOutputDev::tilingPatternFill at SplashOutputDev.cc - Divide by zero.
+
+2. CVE-2019-9200: There is a heap-based buffer over-read in the function ImageStream::getLine() located in Stream.cc, triggered by mishandling of a negative number of characters returned by the underlying decode filter - Heap buffer overflow (OOB read).
+
+3. CVE-2018-20650: A reachable Object::dictLookup assertion in Poppler 0.72.0 allows attackers to cause a denial of service due to the lack of a check for the dict data type, as demonstrated by use of the FileSpec class in FileSpec.cc - Type confusion.
+
+4. CVE-2017-9776: A heap-based buffer over-read vulnerability was found in the function JBIG2Bitmap::combine() in JBIG2Stream.cc, related to extraneous JBIG2 symbol dictionary or text region data - Heap buffer overflow (OOB read).
+
 ## OpenSSL
+1. CVE-2016-2108: The ASN.1 implementation in OpenSSL allows remote attackers to execute arbitrary code or cause a denial of service (buffer underflow and memory corruption) via an ANY field in crafted serialized data, aka the "negative zero" issue - Memory corruption.
+
+2. CVE-2016-2109: The asn1_d2i_read_bio function in crypto/asn1/a_d2i_fp.c allows remote attackers to cause a denial of service (memory consumption) via a short invalid encoding - Memory exhaustion / denial of service.
+
+3. CVE-2016-0797: Multiple integer overflows in crypto/bn/bn_print.c allow remote attackers to cause a denial of service (heap memory corruption or NULL pointer dereference) via crafted data that triggers an integer overflow in BN_dec2bn / BN_hex2bn - Integer overflow.
+
+4. CVE-2016-7052: crypto/x509/x509_vfy.c allows remote attackers to cause a denial of service (NULL pointer dereference and application crash) via a malformed X.509 certificate with crafted CRL distribution points - Null pointer dereference.
+
 ## PHP
+1. CVE-2019-11034: An out-of-bounds read can occur in exif_process_IFD_in_MAKERNOTE in ext/exif/exif.c via crafted EXIF data in a JPEG file - OOB Read.
+
+2. CVE-2019-9641: exif_process_IFD_in_TIFF in ext/exif/exif.c performs a bounds check using an addition that can overflow when the IFD directory offset is near SIZE_MAX, bypassing the check - Integer overflow.
+
+3. CVE-2017-11362: ext/intl/msgformat/msgformat_parse.c mishandles the msgfmt_parse_message function call with a long locale name argument, allowing a denial of service or possibly other impact - Stack buffer overflow.
+
+4. CVE-2018-7584: There is a stack-based buffer under-read while parsing an HTTP response in the php_stream_url_wrap_http_ex function in ext/standard/http_fopen_wrapper.c - Stack buffer underflow.
+
 ## SQLite
+1. CVE-2019-9936: Running fts5 prefix queries inside a transaction could trigger a heap-based buffer over-read in fts5HashEntrySort in ext/fts5/fts5_hash.c, which may lead to an information leak - Heap buffer overflow (OOB read).
+
+2. CVE-2019-19244: sqlite3Select in select.c allows a crash if a sub-select uses both DISTINCT and window functions, and also has certain ORDER BY usage - Null pointer dereference.
+
+3. CVE-2013-7443: Buffer overflow in the skip-scan optimization (whereLoopAddBtreeIndex in where.c) allows remote attackers to cause a denial of service via crafted SQL statements - Heap buffer overflow.
+
+4. CVE-2019-19959: The zipfile virtual table extension (ext/misc/zipfile.c) uses a stale entry-name length instead of recomputing it with strlen() after normalizing the name, leading to a heap-based buffer overflow - Heap buffer overflow.
