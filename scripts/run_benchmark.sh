@@ -6,11 +6,19 @@
 #
 # Usage:
 #   ./scripts/run_benchmark.sh --fuzzer <deepseek|chatgpt|baseline> \
-#       [--cve <CVE-ID|all>] [--runs 5] [--parallel 3] \
+#       [--target <lib>] [--cve <CVE-ID|all>] [--max-cves N] [--runs 5] [--parallel 3] \
 #       [--timeout 21600] [--build] [--no-resume] [--list]
 #
+# --target <lib> restricts the run to all CVEs of ONE library (libpng, libtiff,
+#   libxml2, openssl, sqlite3, poppler, php) — the resource-limited workflow:
+#   setup one target, benchmark all its CVEs, release it, move on.
+# --cve picks a single CVE (or 'all', the default). When --target is set, 'all'
+#   means "all CVEs of that target".
+# --max-cves N caps the number of CVEs to the first N (alphabetical) of the
+#   selection — e.g. --max-cves 2 runs only 2 CVEs per target. 0 = no cap.
+#
 # Examples:
-#   ./scripts/run_benchmark.sh --fuzzer baseline --cve all --runs 5 --parallel 3
+#   ./scripts/run_benchmark.sh --fuzzer baseline --target libpng --max-cves 2 --runs 2 --parallel 2
 #   ./scripts/run_benchmark.sh --fuzzer deepseek --cve CVE-2019-7317 --runs 5
 #   ./scripts/run_benchmark.sh --fuzzer chatgpt  --cve all --parallel 2
 #
@@ -32,11 +40,19 @@ cd "$ROOT"
 # ── defaults ─────────────────────────────────────────────────────────────────
 FUZZER=""
 CVE="all"
+TARGET=""               # optional: restrict discovery to configs/magma/cve/<TARGET>/
+MAX_CVES=0              # cap CVE count to first N (0 = no cap)
 RUNS=5
 RUN_START=1            # first replicate id; lets you shard ids across launches/VMs
 PARALLEL=3
 TIMEOUT=21600          # 6h per run; orchestrator reads fuzzer.timeout from config,
                        # this is only used to pass MA override if you lower it.
+# Hard wall-clock backstop. The orchestrator self-terminates at TIMEOUT, but a
+# reassessment LLM call in flight at the deadline (or a wedged loop) can overrun
+# it — the timeout is only checked between monitor iterations. We give the run
+# TIMEOUT + grace, then TERM the container (orchestrator flushes metrics on TERM)
+# and KILL it if it ignores TERM. Set grace via MA_TIMEOUT_GRACE (default 900s).
+TIMEOUT_GRACE="${MA_TIMEOUT_GRACE:-900}"
 BUILD=0
 RESUME=1
 LIST_ONLY=0
@@ -45,6 +61,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --fuzzer)   FUZZER="${2:?}"; shift 2 ;;
         --cve)      CVE="${2:?}"; shift 2 ;;
+        --target)   TARGET="${2:?}"; shift 2 ;;
+        --max-cves) MAX_CVES="${2:?}"; shift 2 ;;
         --runs)     RUNS="${2:?}"; shift 2 ;;
         --run-start) RUN_START="${2:?}"; shift 2 ;;
         --parallel) PARALLEL="${2:?}"; shift 2 ;;
@@ -64,26 +82,43 @@ esac
 [[ "$RUNS" =~ ^[1-9][0-9]*$ ]] || { echo "--runs must be a positive integer"; exit 1; }
 [[ "$RUN_START" =~ ^[1-9][0-9]*$ ]] || { echo "--run-start must be a positive integer"; exit 1; }
 [[ "$PARALLEL" =~ ^[1-9][0-9]*$ ]] || { echo "--parallel must be a positive integer"; exit 1; }
+[[ "$MAX_CVES" =~ ^[0-9]+$ ]] || { echo "--max-cves must be a non-negative integer (0 = no cap)"; exit 1; }
 RUN_END=$((RUN_START + RUNS - 1))
 
 [ -f .env ] && { set -a; source .env; set +a; }
-
-# ── discover CVE configs ─────────────────────────────────────────────────────
-declare -a CONFIGS
-if [ "$CVE" = "all" ]; then
-    while IFS= read -r -d '' f; do CONFIGS+=("$f"); done \
-        < <(find configs/magma/cve -name 'CVE-*.yml' -print0 | sort -z)
-else
-    f="$(find configs/magma/cve -name "$CVE.yml" | head -1)"
-    [ -n "$f" ] || { echo "CVE config not found for $CVE under configs/magma/cve/"; exit 1; }
-    CONFIGS+=("$f")
-fi
-[ "${#CONFIGS[@]}" -gt 0 ] || { echo "No CVE configs found."; exit 1; }
 
 # Helpers to derive metadata from a config path/contents.
 lib_of()    { basename "$(dirname "$1")"; }              # configs/magma/cve/<lib>/CVE.yml
 cve_of()    { basename "$1" .yml; }
 binstem_of(){ grep -E '^\s*binary:' "$1" | head -1 | sed -E 's/.*"(.*)".*/\1/' | xargs basename; }
+
+# ── discover CVE configs ─────────────────────────────────────────────────────
+# --target scopes discovery to one library's directory; otherwise search all.
+SEARCH_ROOT="configs/magma/cve"
+if [ -n "$TARGET" ]; then
+    SEARCH_ROOT="configs/magma/cve/$TARGET"
+    [ -d "$SEARCH_ROOT" ] || { echo "Unknown target '$TARGET': no configs under configs/magma/cve/$TARGET/"; exit 1; }
+fi
+
+declare -a CONFIGS
+if [ "$CVE" = "all" ]; then
+    while IFS= read -r -d '' f; do CONFIGS+=("$f"); done \
+        < <(find "$SEARCH_ROOT" -name 'CVE-*.yml' -print0 | sort -z)
+else
+    f="$(find "$SEARCH_ROOT" -name "$CVE.yml" | head -1)"
+    [ -n "$f" ] || { echo "CVE config not found for $CVE under $SEARCH_ROOT/"; exit 1; }
+    CONFIGS+=("$f")
+fi
+[ "${#CONFIGS[@]}" -gt 0 ] || { echo "No CVE configs found under $SEARCH_ROOT/."; exit 1; }
+
+# ── cap CVE count (--max-cves) ───────────────────────────────────────────────
+# Keep the first N (CONFIGS is already sorted) and report what was dropped so a
+# capped run never silently looks like a full one.
+if [ "$MAX_CVES" -gt 0 ] && [ "${#CONFIGS[@]}" -gt "$MAX_CVES" ]; then
+    echo "[bench] --max-cves $MAX_CVES: keeping first $MAX_CVES of ${#CONFIGS[@]} CVE(s); dropping:"
+    for c in "${CONFIGS[@]:$MAX_CVES}"; do echo "          - $(cve_of "$c")  [$(lib_of "$c")]"; done
+    CONFIGS=("${CONFIGS[@]:0:$MAX_CVES}")
+fi
 
 if [ "$LIST_ONLY" -eq 1 ]; then
     echo "Fuzzer: $FUZZER | runs: $RUNS | parallel: $PARALLEL"
@@ -213,8 +248,14 @@ run_one() {
     local orch_args=( -c "$config" --verbosity 1 --force-restart )
     [ "$FUZZER" = "baseline" ] && orch_args+=( --baseline )
 
+    # Hard wall-clock backstop: TIMEOUT + grace, TERM then KILL (see TIMEOUT_GRACE).
+    # The container's orchestrator should self-terminate well before this fires;
+    # this only catches an overrun/wedge. 124 = timeout fired (logged, not fatal).
+    local hard_cap=$((TIMEOUT + TIMEOUT_GRACE))
+
     echo "[bench] START: $cve run $run_i  (lib=$lib)"
-    docker compose run --rm --name "$cname" \
+    timeout --signal=TERM --kill-after=120 "$hard_cap" \
+        docker compose run --rm --name "$cname" \
         -e "MA_BENCHMARK_RUN_ID=$run_i" \
         -e "MA_FUZZER_LABEL=$FUZZER" \
         -e "MA_FUZZER_TIMEOUT=$TIMEOUT" \
@@ -226,6 +267,11 @@ run_one() {
         "magma-$lib" \
         python3 /opt/mahybridfuzz/src/orchestrator.py "${orch_args[@]}" \
         > "$run_dir/orchestrator.log" 2>&1
+    local rc=$?
+    if [ "$rc" -eq 124 ]; then
+        echo "[bench] WARN:  $cve run $run_i hit hard wall-clock cap (${hard_cap}s) — orchestrator overran TIMEOUT+grace."
+        docker kill "$cname" 2>/dev/null || true
+    fi
 
     if job_is_done "$cve" "$run_i"; then
         echo "done" > "$run_dir/STATUS"

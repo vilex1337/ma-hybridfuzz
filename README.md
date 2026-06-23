@@ -74,16 +74,29 @@ with bounded parallelism, automatic resume, and per-run metrics. Full guide:
 Both LLM fuzzers compute attention distance with a **local CPU LineVul model**
 (no external server). The baseline seeds from the Magma corpus.
 
-### One-time setup
+### Setup (one target at a time)
+
+On a resource-limited VM you don't build all libraries up front. `setup_vm.sh`
+takes a **single target** and builds only that library's image, so you can:
+**set up one target → benchmark all its CVEs → release it → move to the next.**
 
 ```bash
 git clone <repo-url> ma-hybridfuzz && cd ma-hybridfuzz
-./scripts/setup_vm.sh          # clones Magma into ./magma, checks Docker, builds images
 nano .env                      # set DEEPSEEK_API_KEY and/or OPENAI_API_KEY (see .env.example)
+
+./scripts/setup_vm.sh --list   # show targets: libpng libtiff libxml2 openssl sqlite3 poppler php
+./scripts/setup_vm.sh libpng   # clones Magma into ./magma, checks Docker, builds ONLY magma-libpng
 ```
 
-> `./magma` is **not** in the repo — `setup_vm.sh` clones it. Without it the
-> Docker builds fail.
+`setup_vm.sh all` builds every library (the old behaviour). The first run always
+clones `./magma`, which is **not** in the repo — without it the Docker builds fail.
+
+When you finish a target, free its image before setting up the next one
+(`setup_vm.sh` prints the exact command on completion):
+
+```bash
+docker rmi $(docker images -q 'ma-hybridfuzz*magma-libpng*') 2>/dev/null; docker image prune -f
+```
 
 ### Smoke test before the 6-hour runs
 
@@ -100,7 +113,28 @@ Expect `complete=True`, `fuzzing_loop_time_s≈600`, `total_tokens>0`, and
 `llm_estimated_calls=0` (real token usage is flowing). Run the LLM smoke tests
 **one at a time first** so the LineVul weights download into `./models/` once.
 
-### Full runs (use tmux/nohup so they survive disconnect)
+### Per-target runs (resource-limited workflow)
+
+Benchmark **all CVEs of one target** with `--target`, and cap how many CVEs to
+run with `--max-cves` when time is tight. Use tmux/nohup so runs survive a
+disconnect.
+
+```bash
+# 2 CVEs of libpng × 2 runs each, 2 in parallel (~6 h per run = two ~6 h waves):
+./scripts/run_benchmark.sh --fuzzer baseline --target libpng --max-cves 2 --runs 2 --parallel 2
+
+# then free the image and move to the next target
+docker rmi $(docker images -q 'ma-hybridfuzz*magma-libpng*') 2>/dev/null; docker image prune -f
+./scripts/setup_vm.sh libtiff
+./scripts/run_benchmark.sh --fuzzer baseline --target libtiff --max-cves 2 --runs 2 --parallel 2
+```
+
+`--target <lib>` selects every CVE under `configs/magma/cve/<lib>/`; `--max-cves N`
+keeps the first N (alphabetical) and logs the ones it drops. Each run is hard-capped
+at `--timeout` + a grace period (`MA_TIMEOUT_GRACE`, default 900 s) so a run can
+never overrun 6 h even if a reassessment LLM call is in flight at the deadline.
+
+### Full runs (all CVEs of all targets)
 
 ```bash
 ./scripts/run_benchmark.sh --fuzzer baseline --cve all --runs 5 --parallel 3
@@ -116,7 +150,9 @@ Expect `complete=True`, `fuzzing_loop_time_s≈600`, `total_tokens>0`, and
 | Flag | Meaning |
 |------|---------|
 | `--fuzzer <name>` | `deepseek` \| `chatgpt`/`openai` \| `baseline` (required) |
-| `--cve <ID\|all>` | one CVE (e.g. `CVE-2019-7317`) or every config under `configs/magma/cve/` |
+| `--target <lib>` | restrict to all CVEs of one library (`libpng`, `libtiff`, …) |
+| `--cve <ID\|all>` | one CVE (e.g. `CVE-2019-7317`) or every config in scope (default `all`) |
+| `--max-cves N` | cap to the first N CVEs of the selection (`0` = no cap) |
 | `--runs N` | replicate runs per CVE (default 5) |
 | `--run-start S` | first replicate id (default 1) — shard ids across VMs |
 | `--parallel N` | concurrent runs (default 3) |

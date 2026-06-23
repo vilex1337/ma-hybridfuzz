@@ -406,9 +406,27 @@ class BenchmarkMetrics:
         # Column order: base columns first, then any extras in sorted order.
         extra_keys = sorted(k for k in row if k not in _BASE_COLUMNS)
         fieldnames = _BASE_COLUMNS + extra_keys
-        mode = "w" if overwrite else "a"
-        write_header = overwrite or not self._csv_path.exists() or self._csv_path.stat().st_size == 0
-        with open(self._csv_path, mode, newline="") as f:
+
+        if overwrite:
+            # Atomic full rewrite: write to a temp file in the same dir, then
+            # os.replace() (atomic on POSIX) over the target. Without this, a
+            # SIGKILL (hard wall-clock cap / OOM) landing between truncate and
+            # writerow would leave an empty/header-only file. Single-row mode
+            # only — each (cve,run) owns its own file, so the temp name never
+            # collides with another concurrent job.
+            tmp_path = self._csv_path.with_suffix(self._csv_path.suffix + ".tmp")
+            with open(tmp_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerow(row)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self._csv_path)
+            return
+
+        # Append mode (legacy logs/overhead_metrics.csv).
+        write_header = not self._csv_path.exists() or self._csv_path.stat().st_size == 0
+        with open(self._csv_path, "a", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             if write_header:
                 writer.writeheader()
