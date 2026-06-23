@@ -10,8 +10,9 @@ networkx>=3.0
 libclang>=16.0.0
 requests>=2.31.0
 
-# Local LineVul attention scorer (CPU) — see src/pre_phase/linevul_scorer.py
-# torch CPU wheels are large (~750MB); installed once into the Docker image.
-torch>=2.0.0
-transformers>=4.40.0
-gdown>=5.0.0
+# NOTE: LineVul (torch/transformers) is intentionally NOT in this file — it is
+# heavy (~750MB) and only needed for attention scoring in the pre-phase. To keep
+# the fuzzer Docker image light, LineVul now runs as a server on the VM HOST.
+# On the host:  pip install -r requirements-linevul.txt
+#               ./scripts/run_linevul_server.sh
+# See src/pre_phase/linevul_scorer.py (remote path) and inference/linevul_server.py.

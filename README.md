@@ -71,8 +71,10 @@ with bounded parallelism, automatic resume, and per-run metrics. Full guide:
 | `chatgpt` (= `openai`) | MA-HybridFuzz + an OpenAI model (default `o4-mini`) | `OPENAI_API_KEY` |
 | `baseline` | Plain AFL++ (no LLM, no attention) | nothing |
 
-Both LLM fuzzers compute attention distance with a **local CPU LineVul model**
-(no external server). The baseline seeds from the Magma corpus.
+Both LLM fuzzers compute attention distance with **LineVul**, which runs as a
+small server on the **VM host** (outside Docker) — see *LineVul server* below.
+This keeps the fuzzer image light (no torch/transformers ~750 MB). The baseline
+uses no LLM/attention and seeds from the Magma corpus.
 
 ### Setup (one target at a time)
 
@@ -97,6 +99,28 @@ When you finish a target, free its image before setting up the next one
 ```bash
 docker rmi $(docker images -q 'ma-hybridfuzz*magma-libpng*') 2>/dev/null; docker image prune -f
 ```
+
+### LineVul server (host — only for the LLM fuzzers)
+
+To keep the Docker image light, the heavy LineVul attention model (torch +
+transformers) is **not** in the image. It runs as a small server on the VM host;
+the `deepseek`/`chatgpt` containers call it during their pre-phase over
+`host.docker.internal`. The `baseline` fuzzer doesn't need it.
+
+```bash
+# one-time (host): install the heavy deps in their own venv
+python3 -m venv .venv-linevul && source .venv-linevul/bin/activate
+pip install -r requirements-linevul.txt
+
+# start the server (leave it running — tmux/nohup); weights auto-download to ./models
+./scripts/run_linevul_server.sh          # listens on :8501 (set LINEVUL_PORT to change)
+```
+
+`run_benchmark.sh` health-checks the server before launching an LLM fuzzer and
+**aborts** if it's down (so a 6 h run never silently degrades to uniform scores).
+Override with `MA_ALLOW_NO_LINEVUL=1` to run anyway, or point elsewhere with
+`MA_LINEVUL_HEALTH_URL` / `LINEVUL_PORT`. The server stays up across targets —
+start it once per VM, not per target.
 
 ### Smoke test before the 6-hour runs
 

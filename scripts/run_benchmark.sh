@@ -159,6 +159,23 @@ case "$FUZZER" in
         ;;
 esac
 
+# ── LineVul server preflight (LLM fuzzers only) ──────────────────────────────
+# Attention scoring runs on the HOST now (scripts/run_linevul_server.sh). If it's
+# down, the pre-phase silently degrades to uniform attention scores — which would
+# quietly waste a 6h run — so fail fast unless MA_ALLOW_NO_LINEVUL=1.
+if [ "$FUZZER" != "baseline" ]; then
+    LINEVUL_HEALTH="${MA_LINEVUL_HEALTH_URL:-http://127.0.0.1:${LINEVUL_PORT:-8501}/health}"
+    if curl -fsS --max-time 10 "$LINEVUL_HEALTH" >/dev/null 2>&1; then
+        echo "[bench] LineVul server OK: $LINEVUL_HEALTH"
+    else
+        echo "[bench] ERROR: LineVul server not reachable at $LINEVUL_HEALTH"
+        echo "        Start it on the host first:  ./scripts/run_linevul_server.sh"
+        echo "        (or set MA_ALLOW_NO_LINEVUL=1 to run with uniform attention scores)"
+        [ "${MA_ALLOW_NO_LINEVUL:-0}" = "1" ] || exit 1
+        echo "[bench] MA_ALLOW_NO_LINEVUL=1 — proceeding with degraded (uniform) attention."
+    fi
+fi
+
 RESULTS_ROOT="$ROOT/workspace/bench/$FUZZER"   # raw AFL output + logs per run
 METRICS_DIR="$ROOT/results/$FUZZER"            # aggregated outputs
 RAW_DIR="$METRICS_DIR/raw"                      # one named CSV per run (durable)
@@ -231,16 +248,11 @@ run_one() {
             echo "[bench] WARNING: baseline seed corpus not found: $corpus (will use minimal seed)"
         fi
     else
-        # LLM fuzzers run local LineVul → mount the model cache, point HF + weights there.
-        # Cap CPU threads (model + BLAS) so parallel pre-phases don't thrash 4 cores;
-        # the model is freed after pre-phase so the 6h loop is light.
-        extra+=(
-            --volume "$ROOT/models:/models"
-            -e "HF_HOME=/models/hf"
-            -e "LINEVUL_WEIGHTS=/models/12heads_linevul_model.bin"
-            -e "LINEVUL_THREADS=${LINEVUL_THREADS:-2}"
-            -e "OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}"
-        )
+        # LLM fuzzers score attention distance via the LineVul server on the HOST
+        # (outside Docker — see scripts/run_linevul_server.sh). The container reaches
+        # it over host.docker.internal and the remote path in linevul_scorer.py, so
+        # the image ships no torch/transformers/model. No model mount needed.
+        extra+=( -e "MA_LINEVUL_SERVER_URL=http://host.docker.internal:${LINEVUL_PORT:-8501}" )
         # Optional hard RAM cap per container (e.g. BENCH_MEM_LIMIT=2.5g).
         [ -n "${BENCH_MEM_LIMIT:-}" ] && extra+=( --memory "$BENCH_MEM_LIMIT" )
     fi

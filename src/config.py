@@ -166,9 +166,12 @@ class AttentionConfig:
         env_enabled = _env("MA_ATTENTION_ENABLED")
         if env_enabled is not None:
             enabled = env_enabled.strip().lower() in ("1", "true", "yes", "on")
-        # LineVul now runs locally on CPU by default, so the stale ngrok URLs
-        # committed in configs/magma/**.yml are intentionally ignored. Set
-        # MA_LINEVUL_SERVER_URL only if you want the legacy remote server.
+        # LineVul runs as a server on the VM host (outside Docker) to keep the
+        # fuzzer image light; run_benchmark.sh sets MA_LINEVUL_SERVER_URL to
+        # http://host.docker.internal:<port>. The stale ngrok URLs committed in
+        # configs/magma/**.yml are intentionally ignored. With no URL set, the
+        # scorer would try the in-process model (absent in the slim image) and
+        # then fall back to uniform attention scores.
         return cls(
             enabled=enabled,
             server_url=_env("MA_LINEVUL_SERVER_URL") or "",

@@ -106,6 +106,8 @@ if [ ! -f .env ]; then
 fi
 
 # ── 4. Models cache dir (LineVul weights + HuggingFace cache) ────────────────
+# LineVul runs on the HOST now (not in the image), but its weights/cache still
+# live under ./models — the host server (scripts/run_linevul_server.sh) reads them.
 mkdir -p models/hf workspace
 echo "[setup] models/ cache dir ready (LineVul weights download here on first run)."
 
@@ -120,7 +122,12 @@ fi
 
 echo ""
 echo "=== Setup complete ==="
-echo "Next: edit .env, then benchmark every CVE of this target, e.g."
+echo "For the LLM fuzzers (deepseek/chatgpt), start the LineVul server on this HOST"
+echo "first (it is no longer inside the image — keeps the image light):"
+echo "  pip install -r requirements-linevul.txt   # one time"
+echo "  ./scripts/run_linevul_server.sh           # leave running (tmux/nohup)"
+echo ""
+echo "Then edit .env and benchmark every CVE of this target, e.g."
 if [ "$TARGET" != "all" ]; then
     echo "  ./scripts/run_benchmark.sh --fuzzer baseline --target $TARGET --runs 5 --parallel 3"
     echo ""
