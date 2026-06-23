@@ -31,6 +31,8 @@ ir: $(INSTALL_DIR)/lib/libtiff.a
 	        -I$(INSTALL_DIR)/include \
 	        -o "$$out" "$$src"; done
 
+MAGMA_OBJ := $(wildcard $(CURDIR)/magma.o)
+
 tiff_read_rgba_fuzzer: $(INSTALL_DIR)/lib/libtiff.a
 	$(CXX) $(CXXFLAGS) -std=c++11 \
 	    -I$(INSTALL_DIR)/include \
@@ -38,7 +40,7 @@ tiff_read_rgba_fuzzer: $(INSTALL_DIR)/lib/libtiff.a
 	    -o $(CURDIR)/tiff_read_rgba_fuzzer \
 	    $(INSTALL_DIR)/lib/libtiffxx.a \
 	    $(INSTALL_DIR)/lib/libtiff.a \
-	    -lz -ljpeg -llzma -lzstd
+	    $(MAGMA_OBJ) -lz -ljpeg -llzma -lzstd $(if $(MAGMA_OBJ),-lrt)
 
 $(INSTALL_DIR)/lib/libtiff.a:
 	cd $(LIBTIFF_SRC) && autoreconf -f -i

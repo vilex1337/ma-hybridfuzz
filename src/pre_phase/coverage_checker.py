@@ -205,6 +205,7 @@ class CoverageChecker:
         extra_cflags = [
             "-fprofile-instr-generate",
             "-fcoverage-mapping",
+            "-DMA_COVERAGE_BUILD",
             "-g",
             "-O0",
             *self.config.target.coverage_compile_flags,

@@ -933,7 +933,7 @@ target_function: str,
                 continue
             last_stats = stats
 
-            current_coverage = stats.get("paths_total", 0)
+            current_coverage = stats.get("corpus_count", 0)
             crashes = stats.get("unique_crashes", 0)
 
             elapsed = time.time() - start_time
@@ -946,17 +946,24 @@ target_function: str,
             )
 
             # ── Effectiveness metrics: TTE and TTR ────────────────────────────
-            if crashes > 0:
-                self.metrics.poll_tte(self.config.paths.crashes)
-            if current_coverage > prev_coverage and not self.metrics.has_ttr:
-                self.metrics.poll_ttr(
-                    coverage_checker=self.coverage_checker,
-                    binary=self.config.target.binary,
-                    target_fn=self.config.target.target_function,
-                    fcc=self._pre_phase_ctx.get("fcc", []),
-                    crashes_dir=self.config.paths.crashes,
+            if self.afl.canary_storage_path and self.config.target.magma_bug_id:
+                self.metrics.poll_canary(
+                    storage_path=self.afl.canary_storage_path,
+                    bug_id=self.config.target.magma_bug_id,
                     elapsed_s=elapsed,
                 )
+            else:
+                if crashes > 0:
+                    self.metrics.poll_tte(self.config.paths.crashes)
+                if current_coverage > prev_coverage and not self.metrics.has_ttr:
+                    self.metrics.poll_ttr(
+                        coverage_checker=self.coverage_checker,
+                        binary=self.config.target.binary,
+                        target_fn=self.config.target.target_function,
+                        fcc=self._pre_phase_ctx.get("fcc", []),
+                        crashes_dir=self.config.paths.crashes,
+                        elapsed_s=elapsed,
+                    )
 
             # ── Durable metrics snapshot (survives interruption) ──────────────
             if time.time() - last_snapshot >= snapshot_interval:
@@ -1161,7 +1168,7 @@ target_function: str,
             )
         else:
             logger.debug("[Reassessment #%d] No AFL++ queue input found yet.", reassessment_count)
-        coverage_before = int(afl_stats.get("paths_total", 0))
+        coverage_before = int(afl_stats.get("corpus_count", 0))
 
         target_info = {
             "target_function": ctx.get("target_function", ""),

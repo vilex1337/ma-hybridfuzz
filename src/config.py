@@ -77,6 +77,7 @@ class TargetConfig:
     ir_compile_flags: list[str] = field(default_factory=list)
     ir_build_timeout: int = 300
     entry_points: list[str] = field(default_factory=list)
+    magma_bug_id: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict) -> "TargetConfig":
@@ -92,6 +93,7 @@ class TargetConfig:
             fcc=raw.get("fcc", []),
             coverage_binary=raw.get("coverage_binary", ""),
             coverage_compile_flags=raw.get("coverage_compile_flags", []),
+            magma_bug_id=raw.get("magma_bug_id", ""),
             ir_build_dir=raw.get("ir_build_dir", ""),
             ir_cc=raw.get("ir_cc", "clang"),
             ir_cxx=raw.get("ir_cxx", "clang++"),

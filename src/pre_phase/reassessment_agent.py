@@ -388,8 +388,8 @@ class ReassessmentAgent(LLMAgent):
         if not stats:
             return "No stats available."
         fields = [
-            ("paths_total",    "Total paths discovered"),
-            ("paths_found",    "New paths found"),
+            ("corpus_count",   "Total paths discovered"),
+            ("corpus_found",   "New paths found"),
             ("unique_crashes", "Unique crashes"),
             ("unique_hangs",   "Unique hangs"),
             ("execs_per_sec",  "Executions/sec"),

@@ -48,6 +48,8 @@ workspace/instrumented/*
 workspace/memory/*
 workspace/*
 
+models/
+models/*
 
 # Python
 __pycache__/

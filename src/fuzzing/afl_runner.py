@@ -19,6 +19,7 @@ class AFLRunner:
         self.config = config
         self._process = None
         self._output_dir = None
+        self.canary_storage_path: str | None = None
 
     def instrument(self, binary: str, source_dir: str, use_asan: bool = True) -> str:
         """Compile and instrument the target binary with AFL++."""
@@ -32,13 +33,22 @@ class AFLRunner:
         }
         if self.config.fuzzer.use_ubsan:
             afl_env["AFL_USE_UBSAN"] = "1"
+
+        # Magma canary instrumentation (reach/trigger tracking, see canary_reader.py).
+        # -include canary.h is harmless even when MAGMA_ENABLE_CANARIES is unset (it
+        # only declares macros); the bug patches gate the actual MAGMA_LOG call sites
+        # behind #ifdef MAGMA_ENABLE_CANARIES.
+        canary_h = Path("/magma_src/canary.h")
+        extra_cflags = ["-include", str(canary_h), "-DMAGMA_ENABLE_CANARIES"] if canary_h.exists() else []
+
         logger.log(
             VERBOSE_LEVEL,
-            "[AFLRunner] Instrumentation requested: binary=%s source_dir=%s output=%s env=%s",
+            "[AFLRunner] Instrumentation requested: binary=%s source_dir=%s output=%s env=%s canary=%s",
             binary,
             source_dir,
             instrumented_path,
             afl_env,
+            bool(extra_cflags),
         )
 
         ok = build_binary(
@@ -48,6 +58,7 @@ class AFLRunner:
             "afl-clang-fast++",
             binary_path.stem,
             env=afl_env,
+            extra_cflags=extra_cflags,
         )
         if not ok:
             raise RuntimeError(f"AFL++ instrumentation failed for {binary}")
@@ -85,6 +96,19 @@ class AFLRunner:
         env.setdefault("AFL_AUTORESUME", "1")               # resume instead of refusing non-empty out
         # ASAN sometimes reports false leaks at exit; disabling that reduces noise.
         env.setdefault("ASAN_OPTIONS", "abort_on_error=1:symbolize=0:detect_leaks=0")
+
+        # Magma canary storage (reach/trigger tracking, see canary_reader.py).
+        # Only meaningful if the binary was instrumented with MAGMA_ENABLE_CANARIES
+        # (i.e. /magma_src/canary.h existed at instrument() time) and the CVE
+        # config declares target.magma_bug_id.
+        if self.config.target.magma_bug_id:
+            from benchmark.canary_reader import init_canary_storage
+            self.canary_storage_path = str(Path(self.config.paths.coverage) / "canary.raw")
+            init_canary_storage(self.canary_storage_path)
+            env["MAGMA_STORAGE"] = self.canary_storage_path
+            logger.info("Magma canary storage: %s (bug_id=%s)", self.canary_storage_path, self.config.target.magma_bug_id)
+        else:
+            self.canary_storage_path = None
 
         # Build AFL++ command
         # ASAN reserves large virtual address ranges; a hard memory cap causes
@@ -216,8 +240,15 @@ class AFLRunner:
             logger.debug("Could not read stats: %s", e)
             return None
 
+        # Modern AFL++ writes saved_crashes/saved_hangs instead of the
+        # AFL-classic unique_crashes/unique_hangs field names.
+        if "unique_crashes" not in stats and "saved_crashes" in stats:
+            stats["unique_crashes"] = stats["saved_crashes"]
+        if "unique_hangs" not in stats and "saved_hangs" in stats:
+            stats["unique_hangs"] = stats["saved_hangs"]
+
         # Convert numeric fields
-        for field in ("paths_total", "unique_crashes", "unique_hangs", "execs_done"):
+        for field in ("corpus_count", "unique_crashes", "unique_hangs", "execs_done"):
             if field in stats:
                 try:
                     stats[field] = int(stats[field])

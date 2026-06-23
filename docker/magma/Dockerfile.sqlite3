@@ -33,6 +33,17 @@ RUN find /targets/magma/sqlite3/patches/setup \
 COPY targets/magma/sqlite3/Makefile /targets/magma/sqlite3/Makefile
 COPY targets/magma/main_stub.cpp /targets/magma/sqlite3/main_stub.cpp
 
+# Magma canary instrumentation (reach/trigger tracking for TTR/TTE, see
+# magma/magma/src/canary.{c,h}). Built once here and linked into the AFL
+# binary; harmless if unused by builds that don't pass -DMAGMA_ENABLE_CANARIES.
+COPY magma/magma/src/ /magma_src/
+RUN cc -fPIC -I/magma_src -DMAGMA_STORAGE='"/tmp/magma_canary_default.raw"' \
+        -c /magma_src/canary.c -o /tmp/canary.o && \
+    cc -fPIC -I/magma_src -DMAGMA_STORAGE='"/tmp/magma_canary_default.raw"' \
+        -c /magma_src/storage.c -o /tmp/storage.o && \
+    ld -r /tmp/canary.o /tmp/storage.o -o /targets/magma/sqlite3/magma.o && \
+    rm /tmp/canary.o /tmp/storage.o
+
 RUN mkdir -p /workspace/{corpus,output,mutators,distance_cache,coverage,logs,memory,instrumented,seed_code} \
     && mkdir -p /opt/mahybridfuzz/src
 

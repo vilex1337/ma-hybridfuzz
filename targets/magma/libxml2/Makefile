@@ -31,12 +31,14 @@ ir: $(INSTALL_DIR)/lib/libxml2.a
 	        -I$(INSTALL_DIR)/include/libxml2 -I$(CURDIR) \
 	        -o "$$out" "$$src"; done
 
+MAGMA_OBJ := $(wildcard $(CURDIR)/magma.o)
+
 libxml2_xml_read_memory_fuzzer: $(INSTALL_DIR)/lib/libxml2.a
 	$(CXX) $(CXXFLAGS) -std=c++11 \
 	    -I$(INSTALL_DIR)/include/libxml2 -I$(CURDIR) \
 	    $(FUZZER_SRC) $(CURDIR)/main_stub.cpp \
 	    -o $(CURDIR)/libxml2_xml_read_memory_fuzzer \
-	    $(INSTALL_DIR)/lib/libxml2.a -lz -llzma
+	    $(INSTALL_DIR)/lib/libxml2.a $(MAGMA_OBJ) -lz -llzma $(if $(MAGMA_OBJ),-lrt)
 
 $(INSTALL_DIR)/lib/libxml2.a:
 	cd $(LIBXML2_SRC) && autoreconf -f -i

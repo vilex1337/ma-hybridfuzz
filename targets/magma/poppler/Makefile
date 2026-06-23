@@ -42,6 +42,8 @@ ir:
 	        -I$(POPPLER_SRC)/cpp \
 	        -o "$$out" "$$src"; done
 
+MAGMA_OBJ := $(wildcard $(CURDIR)/magma.o)
+
 pdf_fuzzer: $(POPPLER_DIR)/libpoppler.a
 	$(CXX) $(CXXFLAGS) -std=c++17 \
 	    -I$(FREETYPE_DIR)/include/freetype2 \
@@ -52,7 +54,7 @@ pdf_fuzzer: $(POPPLER_DIR)/libpoppler.a
 	    -o $(CURDIR)/pdf_fuzzer \
 	    $(POPPLER_DIR)/libpoppler.a \
 	    $(FREETYPE_DIR)/lib/libfreetype.a \
-	    -ljpeg -lz -lpng -lopenjp2 -llcms2 -lfontconfig -ltiff -lpthread -lm
+	    $(MAGMA_OBJ) -ljpeg -lz -lpng -lopenjp2 -llcms2 -lfontconfig -ltiff -lpthread -lm $(if $(MAGMA_OBJ),-lrt)
 
 $(POPPLER_DIR)/libpoppler.a: $(FREETYPE_DIR)/lib/libfreetype.a
 	mkdir -p $(POPPLER_DIR)

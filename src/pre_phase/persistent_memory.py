@@ -348,7 +348,7 @@ class PersistentMemory:
             snapshots = []
         snapshots.append({
             "timestamp": time.time(),
-            "paths_total": afl_stats.get("paths_total", 0),
+            "paths_total": afl_stats.get("corpus_count", 0),
             "unique_crashes": afl_stats.get("unique_crashes", 0),
             "execs_done": afl_stats.get("execs_done", 0),
             "execs_per_sec": afl_stats.get("execs_per_sec", "?"),

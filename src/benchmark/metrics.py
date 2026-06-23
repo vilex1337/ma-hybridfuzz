@@ -149,6 +149,28 @@ class BenchmarkMetrics:
     def has_tte(self) -> bool:
         return "tte_s" in self._timing
 
+    def poll_canary(self, storage_path: str | Path, bug_id: str, elapsed_s: float) -> None:
+        """
+        Record TTR/TTE from Magma's canary shared-memory file (reach/trigger
+        counters written synchronously by MAGMA_LOG, see canary_reader.py).
+        Unlike poll_ttr/poll_tte's queue-scan, this survives the bug-triggering
+        input crashing the process, since the write happens before the fault.
+        No-op once both are recorded, or if the bug isn't found yet.
+        """
+        if self.has_ttr and self.has_tte:
+            return
+        from benchmark.canary_reader import read_canary
+        result = read_canary(storage_path, bug_id)
+        if result is None:
+            return
+        reached, triggered = result
+        if reached > 0 and not self.has_ttr:
+            self._timing["ttr_s"] = round(elapsed_s, 3)
+            logger.info("[Metrics] TTR recorded via canary: %.2fs", elapsed_s)
+        if triggered > 0 and not self.has_tte:
+            self._timing["tte_s"] = round(elapsed_s, 3)
+            logger.info("[Metrics] TTE recorded via canary: %.2fs", elapsed_s)
+
     def poll_tte(self, crashes_dir: str | Path) -> None:
         """Scan AFL++ crash files; record TTE from the earliest crash filename's time: field.
 

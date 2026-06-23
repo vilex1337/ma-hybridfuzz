@@ -36,14 +36,16 @@ ir: $(AMALGAM)
 	    -o "$(IR_DIR)/main_stub.ll" $(CURDIR)/main_stub.cpp
 
 FUZZER_OBJ := $(BUILD_DIR)/ossfuzz.o
+MAGMA_OBJ  := $(wildcard $(CURDIR)/magma.o)
 
 sqlite3_fuzz: $(BUILD_DIR)/sqlite3.o $(FUZZER_OBJ)
 	$(CXX) $(CXXFLAGS) \
 	    $(CURDIR)/main_stub.cpp \
 	    $(FUZZER_OBJ) \
 	    $(BUILD_DIR)/sqlite3.o \
+	    $(MAGMA_OBJ) \
 	    -o $(CURDIR)/sqlite3_fuzz \
-	    -pthread -ldl -lm
+	    -pthread -ldl -lm $(if $(MAGMA_OBJ),-lrt)
 
 $(FUZZER_OBJ): $(BUILD_DIR)/sqlite3.o
 	$(CC) $(CFLAGS) \

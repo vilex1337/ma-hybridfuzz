@@ -28,12 +28,14 @@ ir: $(BUILD_DIR)/libpng16.a
 	        -I$(LIBPNG_SRC) -I$(BUILD_DIR) \
 	        -o "$$out" "$$src"; done
 
+MAGMA_OBJ := $(wildcard $(CURDIR)/magma.o)
+
 libpng_read_fuzzer: $(BUILD_DIR)/libpng16.a
 	$(CXX) $(CXXFLAGS) -std=c++11 -include cstdlib \
 	    -I$(LIBPNG_SRC) -I$(BUILD_DIR) \
 	    $(FUZZER_SRC) $(CURDIR)/main_stub.cpp \
 	    -o $(CURDIR)/libpng_read_fuzzer \
-	    $(BUILD_DIR)/libpng16.a -lz
+	    $(BUILD_DIR)/libpng16.a $(MAGMA_OBJ) -lz $(if $(MAGMA_OBJ),-lrt)
 
 $(BUILD_DIR)/libpng16.a:
 	cd $(LIBPNG_SRC) && autoreconf -f -i
