@@ -20,6 +20,7 @@ class AFLRunner:
         self._process = None
         self._output_dir = None
         self.canary_storage_path: str | None = None
+        self._start_kwargs: dict | None = None
 
     def instrument(self, binary: str, source_dir: str, use_asan: bool = True) -> str:
         """Compile and instrument the target binary with AFL++."""
@@ -75,6 +76,13 @@ class AFLRunner:
         scheduler=None,
     ):
         """Start AFL++ fuzzing session."""
+        self._start_kwargs = dict(
+            instrumented_binary=instrumented_binary,
+            corpus_dir=corpus_dir,
+            crashes_dir=crashes_dir,
+            mutator_dir=mutator_dir,
+            scheduler=scheduler,
+        )
         self._output_dir = crashes_dir
         logger.log(
             VERBOSE_LEVEL,
@@ -201,6 +209,22 @@ class AFLRunner:
         if getattr(self, "_afl_log", None):
             self._afl_log.close()
         self._make_output_readable()
+
+    def is_alive(self) -> bool:
+        """Whether the AFL++ process is still running."""
+        return self._process is not None and self._process.poll() is None
+
+    def restart(self):
+        """Respawn AFL++ with the same parameters after an unexpected exit.
+
+        AFL_AUTORESUME=1 (set in start()) means it picks up the existing
+        queue/output dir rather than starting from scratch.
+        """
+        if self._start_kwargs is None:
+            raise RuntimeError("restart() called before start()")
+        if getattr(self, "_afl_log", None):
+            self._afl_log.close()
+        self.start(**self._start_kwargs)
 
     def get_stats(self) -> dict | None:
         """Read AFL++ fuzzer_stats file."""

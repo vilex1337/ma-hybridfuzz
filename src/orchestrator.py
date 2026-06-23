@@ -245,8 +245,13 @@ class Orchestrator:
 
         # Compute attention distance matrix (uses Clang-AST-derived call graph)
         if self.config.attention.enabled:
-            logger.info("[Pre-phase SA] Computing attention distance matrix...")
-            self.attention.compute(source_dir=source_dir, target_function=target_function)
+            cached_distance_path = Path(self.config.paths.distance_cache) / "attention_distances.pkl"
+            if cached_distance_path.exists():
+                logger.info("[Pre-phase SA] Restoring attention distance matrix from cache (skipping LineVul)...")
+                self.attention.load_cached()
+            else:
+                logger.info("[Pre-phase SA] Computing attention distance matrix...")
+                self.attention.compute(source_dir=source_dir, target_function=target_function)
             logger.info("[Pre-phase SA] Attention distance matrix cached")
         else:
             logger.info("[Pre-phase SA] Attention computer disabled — skipping distance matrix")
@@ -914,6 +919,8 @@ target_function: str,
         prev_coverage = 0
         start_time = time.time()
         last_stats: dict | None = None
+        afl_crash_count = 0
+        max_afl_restarts = int(os.getenv("MA_MAX_AFL_RESTARTS", "5"))
         # Periodically flush a durable metrics snapshot so partial results
         # survive a hard kill / reboot. Interval configurable (default 60s).
         snapshot_interval = int(os.getenv("MA_SNAPSHOT_INTERVAL", "60"))
@@ -930,6 +937,20 @@ target_function: str,
             time.sleep(10)
             stats = self.afl.get_stats()
             if stats is None:
+                if not self.afl.is_alive():
+                    afl_crash_count += 1
+                    if afl_crash_count > max_afl_restarts:
+                        logger.error(
+                            "[Fuzzing] AFL++ crashed %d times; giving up on this run.",
+                            afl_crash_count,
+                        )
+                        break
+                    logger.warning(
+                        "[Fuzzing] AFL++ crashed (attempt %d/%d) — restarting...",
+                        afl_crash_count,
+                        max_afl_restarts,
+                    )
+                    self.afl.restart()
                 continue
             last_stats = stats
 
