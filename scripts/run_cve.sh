@@ -23,6 +23,22 @@ declare -A CVE_LIBRARY=(
   [CVE-2017-0663]=libxml2
   [CVE-2017-7375]=libxml2
   [CVE-2016-1836]=libxml2
+  [CVE-2016-2108]=openssl
+  [CVE-2016-2109]=openssl
+  [CVE-2016-0797]=openssl
+  [CVE-2016-7052]=openssl
+  [CVE-2019-9936]=sqlite3
+  [CVE-2019-19244]=sqlite3
+  [CVE-2013-7443]=sqlite3
+  [CVE-2019-19959]=sqlite3
+  [CVE-2019-14494]=poppler
+  [CVE-2019-9200]=poppler
+  [CVE-2018-20650]=poppler
+  [CVE-2017-9776]=poppler
+  [CVE-2019-11034]=php
+  [CVE-2019-9641]=php
+  [CVE-2017-11362]=php
+  [CVE-2018-7584]=php
 )
 
 LIBRARY="${CVE_LIBRARY[$CVE]}"

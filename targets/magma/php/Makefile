@@ -5,7 +5,9 @@ _CXX_SLUG   := $(shell printf '%s' '$(CXX)' | tr '+/ @' '____')
 ONIG_DIR    := $(ONIG_SRC)/install_$(_CXX_SLUG)
 BUILT_STAMP := $(PHP_SRC)/.built_$(_CXX_SLUG)
 
-FUZZER_BIN  := $(CURDIR)/php-fuzz-json
+FUZZER_BINS := $(CURDIR)/php-fuzz-json \
+               $(CURDIR)/php-fuzz-parser \
+               $(CURDIR)/php-fuzz-exif
 
 IR_DIR              ?= $(CURDIR)/ir
 IR_CONFIGURED_STAMP := $(PHP_SRC)/.ir_configured
@@ -19,7 +21,7 @@ PHP_IR_SRCS := $(wildcard $(PHP_SRC)/ext/json/*.c) \
 
 .PHONY: all clean ir
 
-all: $(FUZZER_BIN)
+all: $(FUZZER_BINS)
 
 ir: $(IR_CONFIGURED_STAMP)
 	mkdir -p $(IR_DIR)
@@ -40,13 +42,31 @@ ir: $(IR_CONFIGURED_STAMP)
 	        -I$(ONIG_DIR)/include \
 	        -o "$$out" "$$src"; done
 
-$(FUZZER_BIN): $(BUILT_STAMP)
+$(CURDIR)/php-fuzz-json: $(BUILT_STAMP)
 	cp $(PHP_SRC)/sapi/fuzzer/php-fuzz-json $(CURDIR)/php-fuzz-json
 
-$(IR_CONFIGURED_STAMP):
-	@test -f "$(PHP_SRC)/main/php_config.h" || { \
-	    echo "[ir] ERROR: php_config.h not found — run 'make all' first to build PHP"; \
-	    exit 1; }
+$(CURDIR)/php-fuzz-parser: $(BUILT_STAMP)
+	cp $(PHP_SRC)/sapi/fuzzer/php-fuzz-parser $(CURDIR)/php-fuzz-parser
+
+$(CURDIR)/php-fuzz-exif: $(BUILT_STAMP)
+	cp $(PHP_SRC)/sapi/fuzzer/php-fuzz-exif $(CURDIR)/php-fuzz-exif
+
+$(IR_CONFIGURED_STAMP): $(ONIG_DIR)/lib/libonig.a
+	@if ! test -f "$(PHP_SRC)/main/php_config.h"; then \
+	    echo "[ir] php_config.h not found — configuring PHP to generate it..."; \
+	    cd $(PHP_SRC) && ./buildconf --force; \
+	    cd $(PHP_SRC) && CC="$(IR_CC)" CXX="$(IR_CXX)" ./configure \
+	        --disable-all \
+	        --enable-fuzzer \
+	        --enable-exif \
+	        --enable-mbstring \
+	        --without-pcre-jit \
+	        --disable-phpdbg \
+	        --disable-cgi \
+	        --with-pic \
+	        ONIG_CFLAGS="-I$(ONIG_DIR)/include" \
+	        ONIG_LIBS="-L$(ONIG_DIR)/lib -lonig"; \
+	fi
 	touch $(IR_CONFIGURED_STAMP)
 
 $(BUILT_STAMP): $(ONIG_DIR)/lib/libonig.a
@@ -77,7 +97,7 @@ $(ONIG_DIR)/lib/libonig.a:
 	$(MAKE) -C $(ONIG_DIR)/build install
 
 clean:
-	rm -f $(BUILT_STAMP) $(CURDIR)/php-fuzz-json
+	rm -f $(BUILT_STAMP) $(CURDIR)/php-fuzz-json $(CURDIR)/php-fuzz-parser $(CURDIR)/php-fuzz-exif
 	$(MAKE) -C $(PHP_SRC) clean 2>/dev/null || true
 
 clean-ir:

@@ -48,8 +48,9 @@ $(INSTALL_DIR)/lib/libtiff.a:
 	cd $(BUILD_DIR) && CFLAGS="$(CFLAGS)" CXXFLAGS="$(CXXFLAGS)" $(LIBTIFF_SRC)/configure \
 	    CC="$(CC)" CXX="$(CXX)" \
 	    --disable-shared --prefix="$(INSTALL_DIR)"
-	$(MAKE) -C $(BUILD_DIR) -j$$(nproc 2>/dev/null || echo 1)
-	$(MAKE) -C $(BUILD_DIR) install
+	$(MAKE) -C $(BUILD_DIR)/port -j$$(nproc 2>/dev/null || echo 1)
+	$(MAKE) -C $(BUILD_DIR)/libtiff -j$$(nproc 2>/dev/null || echo 1)
+	$(MAKE) -C $(BUILD_DIR)/libtiff install
 
 clean:
 	rm -rf $(INSTALL_DIR) $(CURDIR)/tiff_read_rgba_fuzzer
